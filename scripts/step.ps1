@@ -258,7 +258,7 @@ elseif ($Action -eq "finish") {
     git checkout $baseBranch
 
     Write-Host "[+] Merging '$currentBranch' into '$baseBranch'..." -ForegroundColor Green
-    git merge $currentBranch --no-ff -m "$currentBranch: feat: complete step $stepPadded $targetTitle"
+    git merge $currentBranch --no-ff -m "`${currentBranch}: feat: complete step $stepPadded $targetTitle"
 
     Run-HealthChecks
 
@@ -273,4 +273,5 @@ elseif ($Action -eq "finish") {
     }
     Write-Host ""
 }
+
 
