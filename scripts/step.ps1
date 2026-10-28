@@ -4,30 +4,56 @@
 
 .DESCRIPTION
     Enforces architectural discipline, runs pre-flight validation checks,
-    creates isolated milestone branches, and safely merges completed steps into main.
+    creates isolated milestone branches, and safely merges completed steps into the base branch.
 
 .EXAMPLE
     .\scripts\step.ps1 start 2
+    .\scripts\step.ps1 2 start
+    .\scripts\step.ps1 step 2 start
     .\scripts\step.ps1 finish
     .\scripts\step.ps1 status
 #>
 
 param(
-    [Parameter(Position = 0, Mandatory = $true)]
-    [string]$Action,
+    [Parameter(Position = 0, Mandatory = $false)]
+    [string]$Arg1,
 
     [Parameter(Position = 1, Mandatory = $false)]
-    [string]$Step
+    [string]$Arg2,
+
+    [Parameter(Position = 2, Mandatory = $false)]
+    [string]$Arg3
 )
 
-# Allow shorthand syntax like ".\scripts\step.ps1 1" -> automatically treated as "start 1"
-if ($Action -match '^\d+$' -and -not $Step) {
-    $Step = $Action
+# Normalize arguments across combinations:
+# "step 1 start", "1 start", "start 1", "finish", "1 finish", "status", "1 status", "1"
+$rawArgs = @($Arg1, $Arg2, $Arg3) | Where-Object { $_ -and $_.Trim() -ne "" }
+$tokens = $rawArgs | Where-Object { $_ -notmatch '^(step|milestone)$' }
+
+$Action = $null
+$Step = $null
+
+foreach ($token in $tokens) {
+    if ($token -match '^\d+$') {
+        $Step = $token
+    } elseif ($token -match '^(start|finish|status)$') {
+        $Action = $token.ToLower()
+    }
+}
+
+# Defaults
+if (-not $Action -and $Step) {
     $Action = "start"
+} elseif (-not $Action -and -not $Step) {
+    $Action = "status"
 }
 
 if ($Action -notin @("start", "finish", "status")) {
-    Write-Host "[-] Error: Action must be 'start', 'finish', or 'status' (or a step number like 1). Example: .\scripts\step.ps1 start 1" -ForegroundColor Red
+    Write-Host "[-] Error: Could not determine action ('start', 'finish', or 'status')." -ForegroundColor Red
+    Write-Host "    Supported formats:" -ForegroundColor Yellow
+    Write-Host "      .\scripts\step.ps1 start 1   (or .\scripts\step.ps1 1 start / .\scripts\step.ps1 step 1 start)" -ForegroundColor DarkGray
+    Write-Host "      .\scripts\step.ps1 finish    (or .\scripts\step.ps1 1 finish / .\scripts\step.ps1 step 1 finish)" -ForegroundColor DarkGray
+    Write-Host "      .\scripts\step.ps1 status    (or .\scripts\step.ps1 1 status / .\scripts\step.ps1 step 1 status)" -ForegroundColor DarkGray
     exit 1
 }
 
@@ -141,10 +167,20 @@ if ($Action -eq "status") {
         Write-Host "$prefix Step $numStr : $title ($branch)" -ForegroundColor $color
     }
     Write-Host ""
+    if ($Step) {
+        $sNum = [int]$Step
+        if ($Steps.ContainsKey($sNum)) {
+            $info = $Steps[$sNum]
+            Write-Host "--- Focus: Step $($sNum.ToString('d2')) : $($info.Title) ---" -ForegroundColor Cyan
+            Write-Host "Branch: $($info.Branch)" -ForegroundColor DarkGray
+            Write-Host "Guide:  $($info.Guide)" -ForegroundColor DarkGray
+            Write-Host ""
+        }
+    }
 }
 elseif ($Action -eq "start") {
     if (-not $Step) {
-        Write-Host "[-] Error: Please provide step number. Example: .\scripts\step.ps1 start 2" -ForegroundColor Red
+        Write-Host "[-] Error: Please provide step number. Example: .\scripts\step.ps1 start 2 (or .\scripts\step.ps1 2)" -ForegroundColor Red
         exit 1
     }
     $stepNum = [int]$Step
