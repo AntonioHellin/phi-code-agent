@@ -1,4 +1,4 @@
-# Step 09: Terminal Polish & UX
+# Step 04: Terminal Polish & UX
 
 ## 1. Architectural Overview
 

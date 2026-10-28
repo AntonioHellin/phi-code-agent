@@ -1,4 +1,4 @@
-# Step 05: Provider Abstraction
+# Step 03: Provider Abstraction
 
 ## 1. Architectural Overview
 

@@ -1,4 +1,4 @@
-# Step 11: Advanced Input Handling
+# Step 08: Advanced Input Handling
 
 ## 1. Architectural Overview
 

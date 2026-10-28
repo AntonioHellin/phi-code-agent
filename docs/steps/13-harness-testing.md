@@ -1,4 +1,4 @@
-# Step 27: Harness End-to-End Testing
+# Step 13: Harness End-to-End Testing
 
 ## 1. Architectural Overview
 

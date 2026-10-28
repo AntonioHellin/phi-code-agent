@@ -1,4 +1,4 @@
-# Step 07: Streaming Responses
+# Step 17: Streaming Responses
 
 ## 1. Architectural Overview
 

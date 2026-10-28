@@ -1,4 +1,4 @@
-# Step 26: Full Terminal UI (TUI)
+# Step 12: Full Terminal UI (TUI)
 
 ## 1. Architectural Overview
 

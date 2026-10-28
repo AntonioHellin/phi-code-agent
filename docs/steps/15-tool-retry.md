@@ -1,4 +1,4 @@
-# Step 04: Tool Error Retry
+# Step 15: Tool Error Retry
 
 ## 1. Architectural Overview
 

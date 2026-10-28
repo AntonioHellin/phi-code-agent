@@ -1,4 +1,4 @@
-# Step 16: Prompt Caching
+# Step 19: Prompt Caching
 
 ## 1. Architectural Overview
 

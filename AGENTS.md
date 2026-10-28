@@ -10,7 +10,7 @@ This file provides architectural guidelines and operational instructions for AI 
 
 1. **Evolutionary Architecture (Concepts > Code)**:
    - Do NOT introduce future abstractions prematurely.
-   - For example, do not create `internal/` packages or separate command registries until the designated steps (`step/21-internal-architecture` and `step/10-slash-commands`). Keep code scoped to the active milestone.
+   - For example, do not create `internal/` packages or separate command registries until the designated steps (`step/10-internal-architecture` and `step/05-slash-commands`). Keep code scoped to the active milestone.
 2. **Errors as Tool Results (Never Panic)**:
    - When a tool execution fails (file not found, syntax error, permission denied), return `(errorMessage, true)`.
    - Never terminate the agent loop or trigger unhandled Go panics. Failures travel back to the LLM so it can observe and attempt self-correction.

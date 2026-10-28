@@ -1,4 +1,4 @@
-# Step 12: Conversation State
+# Step 06: Conversation State
 
 ## 1. Architectural Overview
 

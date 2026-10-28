@@ -58,35 +58,37 @@ if ($Action -notin @("start", "finish", "status")) {
 }
 
 $Steps = @{
-    1 = @{ Branch = "step/01-minimal-loop"; Guide = "docs/steps/01-minimal-loop.md"; Title = "The Minimal Loop" }
-    2 = @{ Branch = "step/02-permission-gate"; Guide = "docs/steps/02-permission-gate.md"; Title = "The Permission Gate" }
-    3 = @{ Branch = "step/03-permission-policies"; Guide = "docs/steps/03-permission-policies.md"; Title = "Permission Policies" }
-    4 = @{ Branch = "step/04-tool-retry"; Guide = "docs/steps/04-tool-retry.md"; Title = "Tool Error Retry" }
-    5 = @{ Branch = "step/05-provider-interface"; Guide = "docs/steps/05-provider-interface.md"; Title = "Provider Abstraction" }
-    6 = @{ Branch = "step/06-providers-and-mocks"; Guide = "docs/steps/06-providers-and-mocks.md"; Title = "Alternative Providers and Mocks" }
-    7 = @{ Branch = "step/07-streaming-responses"; Guide = "docs/steps/07-streaming-responses.md"; Title = "Streaming Responses" }
-    8 = @{ Branch = "step/08-image-inputs"; Guide = "docs/steps/08-image-inputs.md"; Title = "Multimodal and Image Inputs" }
-    9 = @{ Branch = "step/09-terminal-polish"; Guide = "docs/steps/09-terminal-polish.md"; Title = "Terminal Polish and UX" }
-    10 = @{ Branch = "step/10-slash-commands"; Guide = "docs/steps/10-slash-commands.md"; Title = "Slash Commands" }
-    11 = @{ Branch = "step/11-advanced-input"; Guide = "docs/steps/11-advanced-input.md"; Title = "Advanced Input Handling" }
-    12 = @{ Branch = "step/12-conversation-state"; Guide = "docs/steps/12-conversation-state.md"; Title = "Conversation State" }
-    13 = @{ Branch = "step/13-transcript-renderer"; Guide = "docs/steps/13-transcript-renderer.md"; Title = "Transcript Renderer" }
-    14 = @{ Branch = "step/14-compaction-strategies"; Guide = "docs/steps/14-compaction-strategies.md"; Title = "Compaction Strategies" }
-    15 = @{ Branch = "step/15-token-budget-and-cost"; Guide = "docs/steps/15-token-budget-and-cost.md"; Title = "Token Budgeting and Cost Tracking" }
-    16 = @{ Branch = "step/16-prompt-caching"; Guide = "docs/steps/16-prompt-caching.md"; Title = "Prompt Caching" }
-    17 = @{ Branch = "step/17-tool-registry"; Guide = "docs/steps/17-tool-registry.md"; Title = "Plug-and-Play Tool Registry" }
-    18 = @{ Branch = "step/18-custom-tools"; Guide = "docs/steps/18-custom-tools.md"; Title = "Custom Tools Suite" }
-    19 = @{ Branch = "step/19-diff-approval"; Guide = "docs/steps/19-diff-approval.md"; Title = "Diff Approval for File Writes" }
-    20 = @{ Branch = "step/20-mcp-support"; Guide = "docs/steps/20-mcp-support.md"; Title = "Model Context Protocol (MCP)" }
-    21 = @{ Branch = "step/21-internal-architecture"; Guide = "docs/steps/21-internal-architecture.md"; Title = "Internal Package Architecture" }
-    22 = @{ Branch = "step/22-agents-md-context"; Guide = "docs/steps/22-agents-md-context.md"; Title = "Project Context via AGENTS.md" }
-    23 = @{ Branch = "step/23-subagents-delegation"; Guide = "docs/steps/23-subagents-delegation.md"; Title = "Subagents and Task Delegation" }
-    24 = @{ Branch = "step/24-markdown-subagents"; Guide = "docs/steps/24-markdown-subagents.md"; Title = "Markdown-Configured Subagents" }
-    25 = @{ Branch = "step/25-persistent-memory"; Guide = "docs/steps/25-persistent-memory.md"; Title = "Persistent Agent Memory" }
-    26 = @{ Branch = "step/26-full-tui"; Guide = "docs/steps/26-full-tui.md"; Title = "Full Terminal UI (TUI)" }
-    27 = @{ Branch = "step/27-harness-testing"; Guide = "docs/steps/27-harness-testing.md"; Title = "Harness End-to-End Testing" }
-}
+    # --- Phase 1: The Core Arc (Pasos 01 al 13) ---
+    1  = @{ Branch = "step/01-minimal-loop"; Guide = "docs/steps/01-minimal-loop.md"; Title = "The Minimal Loop" }
+    2  = @{ Branch = "step/02-permission-gate"; Guide = "docs/steps/02-permission-gate.md"; Title = "The Permission Gate" }
+    3  = @{ Branch = "step/03-provider-interface"; Guide = "docs/steps/03-provider-interface.md"; Title = "Provider Abstraction" }
+    4  = @{ Branch = "step/04-terminal-polish"; Guide = "docs/steps/04-terminal-polish.md"; Title = "Terminal Polish and UX" }
+    5  = @{ Branch = "step/05-slash-commands"; Guide = "docs/steps/05-slash-commands.md"; Title = "Slash Commands" }
+    6  = @{ Branch = "step/06-conversation-state"; Guide = "docs/steps/06-conversation-state.md"; Title = "Conversation State" }
+    7  = @{ Branch = "step/07-compaction-strategies"; Guide = "docs/steps/07-compaction-strategies.md"; Title = "Compaction Strategies" }
+    8  = @{ Branch = "step/08-advanced-input"; Guide = "docs/steps/08-advanced-input.md"; Title = "Advanced Input Handling" }
+    9  = @{ Branch = "step/09-tool-registry"; Guide = "docs/steps/09-tool-registry.md"; Title = "Plug-and-Play Tool Registry" }
+    10 = @{ Branch = "step/10-internal-architecture"; Guide = "docs/steps/10-internal-architecture.md"; Title = "Internal Package Architecture" }
+    11 = @{ Branch = "step/11-subagents-delegation"; Guide = "docs/steps/11-subagents-delegation.md"; Title = "Subagents and Task Delegation" }
+    12 = @{ Branch = "step/12-full-tui"; Guide = "docs/steps/12-full-tui.md"; Title = "Full Terminal UI (TUI)" }
+    13 = @{ Branch = "step/13-harness-testing"; Guide = "docs/steps/13-harness-testing.md"; Title = "Harness End-to-End Testing" }
 
+    # --- Phase 2: Extensions, How-Tos and Extras (Pasos 14 al 27) ---
+    14 = @{ Branch = "step/14-permission-policies"; Guide = "docs/steps/14-permission-policies.md"; Title = "Permission Policies" }
+    15 = @{ Branch = "step/15-tool-retry"; Guide = "docs/steps/15-tool-retry.md"; Title = "Tool Error Retry" }
+    16 = @{ Branch = "step/16-providers-and-mocks"; Guide = "docs/steps/16-providers-and-mocks.md"; Title = "Alternative Providers and Mocks" }
+    17 = @{ Branch = "step/17-streaming-responses"; Guide = "docs/steps/17-streaming-responses.md"; Title = "Streaming Responses" }
+    18 = @{ Branch = "step/18-token-budget-and-cost"; Guide = "docs/steps/18-token-budget-and-cost.md"; Title = "Token Budgeting and Cost Tracking" }
+    19 = @{ Branch = "step/19-prompt-caching"; Guide = "docs/steps/19-prompt-caching.md"; Title = "Prompt Caching" }
+    20 = @{ Branch = "step/20-diff-approval"; Guide = "docs/steps/20-diff-approval.md"; Title = "Diff Approval for File Writes" }
+    21 = @{ Branch = "step/21-mcp-support"; Guide = "docs/steps/21-mcp-support.md"; Title = "Model Context Protocol (MCP)" }
+    22 = @{ Branch = "step/22-agents-md-context"; Guide = "docs/steps/22-agents-md-context.md"; Title = "Project Context via AGENTS.md" }
+    23 = @{ Branch = "step/23-persistent-memory"; Guide = "docs/steps/23-persistent-memory.md"; Title = "Persistent Agent Memory" }
+    24 = @{ Branch = "step/24-image-inputs"; Guide = "docs/steps/24-image-inputs.md"; Title = "Multimodal and Image Inputs" }
+    25 = @{ Branch = "step/25-custom-tools"; Guide = "docs/steps/25-custom-tools.md"; Title = "Custom Tools Suite" }
+    26 = @{ Branch = "step/26-transcript-renderer"; Guide = "docs/steps/26-transcript-renderer.md"; Title = "Transcript Renderer" }
+    27 = @{ Branch = "step/27-markdown-subagents"; Guide = "docs/steps/27-markdown-subagents.md"; Title = "Markdown-Configured Subagents" }
+}
 # Automatically configure repository hooks path for commit prefixing
 $currentHooks = (git config --get core.hooksPath)
 if ($currentHooks -ne ".githooks") {
@@ -141,6 +143,12 @@ if ($Action -eq "status") {
     Write-Host "=== Phi Agent Code Roadmap Status (Current: $currentBranch) ===" -ForegroundColor Cyan
     Write-Host ""
     for ($i = 1; $i -le 27; $i++) {
+        if ($i -eq 1) {
+            Write-Host "--- Phase 1: The Core Arc (Foundations & Architecture) ---" -ForegroundColor DarkCyan
+        } elseif ($i -eq 14) {
+            Write-Host ""
+            Write-Host "--- Phase 2: Extensions & How-Tos (Modular Capabilities) ---" -ForegroundColor DarkCyan
+        }
         $info = $Steps[$i]
         $branch = $info.Branch
         $exists = Branch-Exists $branch

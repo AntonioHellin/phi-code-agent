@@ -1,4 +1,4 @@
-# Step 17: Plug-and-Play Tool Registry
+# Step 09: Plug-and-Play Tool Registry
 
 ## 1. Architectural Overview
 

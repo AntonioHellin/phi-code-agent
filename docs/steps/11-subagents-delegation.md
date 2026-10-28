@@ -1,4 +1,4 @@
-# Step 23: Subagents & Task Delegation
+# Step 11: Subagents & Task Delegation
 
 ## 1. Architectural Overview
 

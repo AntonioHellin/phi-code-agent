@@ -1,4 +1,4 @@
-# Step 14: Compaction Strategies
+# Step 07: Compaction Strategies
 
 ## 1. Architectural Overview
 

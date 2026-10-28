@@ -1,4 +1,4 @@
-# Step 13: Transcript Renderer
+# Step 26: Transcript Renderer
 
 ## 1. Architectural Overview
 

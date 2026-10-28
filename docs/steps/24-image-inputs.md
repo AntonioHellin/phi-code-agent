@@ -1,4 +1,4 @@
-# Step 08: Multimodal & Image Inputs
+# Step 24: Multimodal & Image Inputs
 
 ## 1. Architectural Overview
 

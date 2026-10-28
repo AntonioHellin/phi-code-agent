@@ -1,4 +1,4 @@
-# Step 20: Model Context Protocol (MCP)
+# Step 21: Model Context Protocol (MCP)
 
 ## 1. Architectural Overview
 

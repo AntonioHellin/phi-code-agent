@@ -1,4 +1,4 @@
-# Step 10: Slash Commands
+# Step 05: Slash Commands
 
 ## 1. Architectural Overview
 

@@ -1,4 +1,4 @@
-# Step 15: Token Budgeting & Cost Tracking
+# Step 18: Token Budgeting & Cost Tracking
 
 ## 1. Architectural Overview
 

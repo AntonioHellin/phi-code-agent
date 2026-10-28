@@ -1,4 +1,4 @@
-# Step 19: Diff Approval for File Writes
+# Step 20: Diff Approval for File Writes
 
 ## 1. Architectural Overview
 

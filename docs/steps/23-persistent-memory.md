@@ -1,4 +1,4 @@
-# Step 25: Persistent Agent Memory
+# Step 23: Persistent Agent Memory
 
 ## 1. Architectural Overview
 

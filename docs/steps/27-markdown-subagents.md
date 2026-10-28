@@ -1,4 +1,4 @@
-# Step 24: Markdown-Configured Subagents
+# Step 27: Markdown-Configured Subagents
 
 ## 1. Architectural Overview
 

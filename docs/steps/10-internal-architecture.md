@@ -1,4 +1,4 @@
-# Step 21: Internal Package Architecture
+# Step 10: Internal Package Architecture
 
 ## 1. Architectural Overview
 
