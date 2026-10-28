@@ -66,3 +66,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\step.ps1 finish
 - **Clean Working Tree**: `step.ps1` halts if uncommitted changes exist.
 - **Sequential Integrity**: Step `N` cannot start until Step `N-1` is merged into the base branch.
 - **Health Verification**: `go vet ./...` and `go build ./...` must pass before branch switching and merging.
+
