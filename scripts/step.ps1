@@ -14,12 +14,22 @@
 
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("start", "finish", "status")]
     [string]$Action,
 
     [Parameter(Position = 1, Mandatory = $false)]
     [string]$Step
 )
+
+# Allow shorthand syntax like ".\scripts\step.ps1 1" -> automatically treated as "start 1"
+if ($Action -match '^\d+$' -and -not $Step) {
+    $Step = $Action
+    $Action = "start"
+}
+
+if ($Action -notin @("start", "finish", "status")) {
+    Write-Host "[-] Error: Action must be 'start', 'finish', or 'status' (or a step number like 1). Example: .\scripts\step.ps1 start 1" -ForegroundColor Red
+    exit 1
+}
 
 $Steps = @{
     1 = @{ Branch = "step/01-minimal-loop"; Guide = "docs/steps/01-minimal-loop.md"; Title = "The Minimal Loop" }
@@ -62,8 +72,15 @@ function Branch-Exists($branchName) {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Get-BaseBranch {
+    if (Branch-Exists "main") { return "main" }
+    if (Branch-Exists "master") { return "master" }
+    return "main"
+}
+
 function Branch-IsMerged($branchName) {
-    & git merge-base --is-ancestor $branchName "main"
+    $base = Get-BaseBranch
+    & git merge-base --is-ancestor $branchName $base
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -144,10 +161,11 @@ elseif ($Action -eq "start") {
 
     Assert-CleanWorkTree
 
+    $baseBranch = Get-BaseBranch
     $current = (git branch --show-current).Trim()
-    if ($current -ne "main") {
-        Write-Host "[*] Switching to 'main' branch..." -ForegroundColor Yellow
-        git checkout main
+    if ($current -ne $baseBranch) {
+        Write-Host "[*] Switching to '$baseBranch' branch..." -ForegroundColor Yellow
+        git checkout $baseBranch
     }
 
     if ($stepNum -gt 1) {
@@ -157,7 +175,7 @@ elseif ($Action -eq "start") {
 
         if (Branch-Exists $prevBranch) {
             if (-not (Branch-IsMerged $prevBranch)) {
-                Write-Host "[-] Pre-flight check failed: Previous step '$prevBranch' is NOT yet merged into 'main'." -ForegroundColor Red
+                Write-Host "[-] Pre-flight check failed: Previous step '$prevBranch' is NOT yet merged into '$baseBranch'." -ForegroundColor Red
                 Write-Host "Finish and merge Step $($prevNum.ToString('d2')) before proceeding to Step $stepPadded." -ForegroundColor Yellow
                 exit 1
             }
@@ -172,7 +190,7 @@ elseif ($Action -eq "start") {
         git checkout $targetBranch
     } else {
         Write-Host "[+] Creating and switching to milestone branch '$targetBranch'..." -ForegroundColor Green
-        git checkout -b $targetBranch main
+        git checkout -b $targetBranch $baseBranch
     }
 
     $guidePath = $target.Guide
@@ -199,16 +217,17 @@ elseif ($Action -eq "finish") {
     Assert-CleanWorkTree
     Run-HealthChecks
 
-    Write-Host "[*] Switching to 'main'..." -ForegroundColor Yellow
-    git checkout main
+    $baseBranch = Get-BaseBranch
+    Write-Host "[*] Switching to '$baseBranch'..." -ForegroundColor Yellow
+    git checkout $baseBranch
 
-    Write-Host "[+] Merging '$currentBranch' into 'main'..." -ForegroundColor Green
+    Write-Host "[+] Merging '$currentBranch' into '$baseBranch'..." -ForegroundColor Green
     git merge $currentBranch --no-ff -m "[$currentBranch] feat: complete step $stepPadded $targetTitle"
 
     Run-HealthChecks
 
     Write-Host ""
-    Write-Host "[+] Step $stepPadded successfully completed and merged into main!" -ForegroundColor Green
+    Write-Host "[+] Step $stepPadded successfully completed and merged into $baseBranch!" -ForegroundColor Green
     Write-Host "    The branch '$currentBranch' remains preserved as a milestone snapshot." -ForegroundColor Cyan
     if ($stepNum -lt 27) {
         $nextNum = $stepNum + 1
