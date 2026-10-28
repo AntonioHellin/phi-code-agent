@@ -53,14 +53,17 @@ var tools = []anthropic.ToolUnionParam{
 }
 
 var client = anthropic.NewClient()
+var scanner = func() *bufio.Scanner {
+	s := bufio.NewScanner(os.Stdin)
+	s.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	return s
+}()
 
 func main() {
 	ctx := context.Background()
 	var messages []anthropic.MessageParam
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
-	fmt.Println("Phi Agent Code - Chapter 01: The Minimal Loop")
+	fmt.Println("Phi Agent Code")
 	fmt.Println("Type your prompt or press Ctrl+C to exit.")
 
 	for {
@@ -126,7 +129,11 @@ func agentLoop(ctx context.Context, messages []anthropic.MessageParam) []anthrop
 // Errors are returned as tool results (string, isError=true) so the model
 // can observe the failure and attempt self-correction.
 func executeTool(name, rawInput string) (string, bool) {
-	fmt.Printf("[tool execute] %s %s\n", name, rawInput)
+	fmt.Printf("[permission required] %s %s\n", name, rawInput)
+	if !confirm("Allow execution?") {
+		return "Permission denied by user", true
+	}
+	fmt.Printf("[tool execute] %s\n", name)
 	switch name {
 	case "bash":
 		var in struct {
@@ -184,4 +191,13 @@ func executeTool(name, rawInput string) (string, bool) {
 	default:
 		return fmt.Sprintf("unknown tool: %s", name), true
 	}
+}
+
+func confirm(prompt string) bool {
+	fmt.Printf("%s [y/N] ", prompt)
+	if !scanner.Scan() {
+		return false
+	}
+	line := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	return line == "y" || line == "yes"
 }
