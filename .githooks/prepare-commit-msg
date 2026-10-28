@@ -6,7 +6,7 @@ BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
 # Only apply to step/* branches
 case "$BRANCH_NAME" in
     step/*)
-        PREFIX="[$BRANCH_NAME]"
+        PREFIX="$BRANCH_NAME:"
         COMMIT_FILE="$1"
         COMMIT_MSG=$(cat "$COMMIT_FILE")
 
