@@ -1,0 +1,23 @@
+#!/bin/sh
+# Git hook to automatically prefix commit messages with the current step branch name.
+
+BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Only apply to step/* branches
+case "$BRANCH_NAME" in
+    step/*)
+        PREFIX="[$BRANCH_NAME]"
+        COMMIT_FILE="$1"
+        COMMIT_MSG=$(cat "$COMMIT_FILE")
+
+        # Skip if message already starts with the branch prefix or is a merge/squash
+        case "$COMMIT_MSG" in
+            *"$PREFIX"*|"Merge "*)
+                ;;
+            *)
+                echo "$PREFIX $COMMIT_MSG" > "$COMMIT_FILE"
+                ;;
+        esac
+        ;;
+esac
+
