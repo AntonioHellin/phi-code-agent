@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+
 	"os"
 	"os/exec"
 	"runtime"
@@ -90,14 +90,13 @@ func main() {
 // the model returns plain text (end_turn).
 func agentLoop(ctx context.Context, provider Provider, messages []Message) []Message {
 	for {
-		log.Printf("[agent] calling provider.Send | len(messages)=%d", len(messages))
+		sp := startSpinner("thinking...")
 		resp, err := provider.Send(ctx, messages, tools)
+		sp.Stop()
 		if err != nil {
 			fmt.Printf("api error: %v\n", err)
 			return messages
 		}
-
-		log.Printf("[agent] received response | stop_reason=%s", resp.StopReason)
 
 		// Record assistant response in conversation history
 		messages = append(messages, Message{
@@ -112,7 +111,7 @@ func agentLoop(ctx context.Context, provider Provider, messages []Message) []Mes
 				fmt.Println(block.Text)
 			case BlockToolUse:
 				result, isErr := executeTool(block.ToolName, block.ToolInput)
-				log.Printf("[tool] executed %s (is_error=%v)", block.ToolName, isErr)
+
 				toolResults = append(toolResults, Block{
 					Type:       BlockToolResult,
 					ToolUseID:  block.ToolUseID,
