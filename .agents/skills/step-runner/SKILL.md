@@ -8,7 +8,7 @@ description: >-
 
 # Step Runner: Milestone Workflow Manager
 
-This skill coordinates the 27 evolutionary milestones of `phi-agent-code` by wrapping the deterministic repository manager [`scripts/step.ps1`](file:///c:/Users/anton/Documents/dev/projects/phi-code-agent/scripts/step.ps1).
+This skill coordinates the 27 evolutionary milestones of `phi-agent-code` by wrapping the deterministic repository manager [`scripts/step.ps1`](scripts/step.ps1).
 
 ## Capabilities
 
