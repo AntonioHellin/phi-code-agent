@@ -18,41 +18,34 @@ const systemPrompt = `You are a coding assistant running in a terminal. You have
 bash, read_file, write_file. Be concise.`
 
 // tools defines the JSON schema catalog of available tools sent to the model.
-var tools = []anthropic.ToolUnionParam{
-	{OfTool: &anthropic.ToolParam{
+var tools = []ToolDef{
+	{
 		Name:        "bash",
-		Description: anthropic.String("Run a shell command and return its combined stdout/stderr."),
-		InputSchema: anthropic.ToolInputSchemaParam{
-			Properties: map[string]any{
-				"command": map[string]any{"type": "string", "description": "The command to run."},
-			},
-			Required: []string{"command"},
+		Description: "Run a shell command and return its combined stdout/stderr.",
+		InputSchema: map[string]any{
+			"command": map[string]any{"type": "string", "description": "The command to run."},
 		},
-	}},
-	{OfTool: &anthropic.ToolParam{
+		Required: []string{"command"},
+	},
+	{
 		Name:        "read_file",
-		Description: anthropic.String("Read the contents of a file at the given path."),
-		InputSchema: anthropic.ToolInputSchemaParam{
-			Properties: map[string]any{
-				"path": map[string]any{"type": "string", "description": "Filesystem path to read."},
-			},
-			Required: []string{"path"},
+		Description: "Read the contents of a file at the given path.",
+		InputSchema: map[string]any{
+			"path": map[string]any{"type": "string", "description": "Filesystem path to read."},
 		},
-	}},
-	{OfTool: &anthropic.ToolParam{
+		Required: []string{"path"},
+	},
+	{
 		Name:        "write_file",
-		Description: anthropic.String("Write content to a file (creating or overwriting it)."),
-		InputSchema: anthropic.ToolInputSchemaParam{
-			Properties: map[string]any{
-				"path":    map[string]any{"type": "string", "description": "Filesystem path to write."},
-				"content": map[string]any{"type": "string", "description": "The bytes to write."},
-			},
-			Required: []string{"path", "content"},
+		Description: "Write content to a file (creating or overwriting it).",
+		InputSchema: map[string]any{
+			"path":    map[string]any{"type": "string", "description": "Filesystem path to write."},
+			"content": map[string]any{"type": "string", "description": "The bytes to write."},
 		},
-	}},
+		Required: []string{"path", "content"},
+	},
 }
 
-var client = anthropic.NewClient()
 var scanner = func() *bufio.Scanner {
 	s := bufio.NewScanner(os.Stdin)
 	s.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -61,7 +54,15 @@ var scanner = func() *bufio.Scanner {
 
 func main() {
 	ctx := context.Background()
-	var messages []anthropic.MessageParam
+	client := anthropic.NewClient()
+	provider := NewAnthropicProvider(
+		&client,
+		string(anthropic.ModelClaudeHaiku5_5),
+		8192,
+		systemPrompt,
+	)
+
+	var messages []Message
 
 	fmt.Println("Phi Agent Code")
 	fmt.Println("Type your prompt or press Ctrl+C to exit.")
@@ -75,24 +76,22 @@ func main() {
 		if input == "" {
 			continue
 		}
-		messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(input)))
-		messages = agentLoop(ctx, messages)
+		messages = append(messages, Message{
+			Role:    RoleUser,
+			Content: []Block{{Type: BlockText, Text: input}},
+		})
+		messages = agentLoop(ctx, provider, messages)
 	}
 }
 
-// agentLoop is the inner agent loop.
+// agentLoop is the vendor-agnostic inner agent loop.
+// It interacts with the LLM solely through the Provider interface abstraction (DIP).
 // Calls the model, executes any requested tools, and loops until
 // the model returns plain text (end_turn).
-func agentLoop(ctx context.Context, messages []anthropic.MessageParam) []anthropic.MessageParam {
+func agentLoop(ctx context.Context, provider Provider, messages []Message) []Message {
 	for {
-		log.Printf("[agent] calling client.Messages.New | len(messages)=%d", len(messages))
-		resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-			Model:     anthropic.ModelClaudeOpus4_7,
-			MaxTokens: 8192,
-			System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
-			Messages:  messages,
-			Tools:     tools,
-		})
+		log.Printf("[agent] calling provider.Send | len(messages)=%d", len(messages))
+		resp, err := provider.Send(ctx, messages, tools)
 		if err != nil {
 			fmt.Printf("api error: %v\n", err)
 			return messages
@@ -101,27 +100,38 @@ func agentLoop(ctx context.Context, messages []anthropic.MessageParam) []anthrop
 		log.Printf("[agent] received response | stop_reason=%s", resp.StopReason)
 
 		// Record assistant response in conversation history
-		messages = append(messages, resp.ToParam())
+		messages = append(messages, Message{
+			Role:    RoleAssistant,
+			Content: resp.Content,
+		})
 
-		var toolResults []anthropic.ContentBlockParamUnion
+		var toolResults []Block
 		for _, block := range resp.Content {
-			switch v := block.AsAny().(type) {
-			case anthropic.TextBlock:
-				fmt.Println(v.Text)
-			case anthropic.ToolUseBlock:
-				result, isErr := executeTool(v.Name, v.JSON.Input.Raw())
-				log.Printf("[tool] executed %s (is_error=%v)", v.Name, isErr)
-				toolResults = append(toolResults, anthropic.NewToolResultBlock(v.ID, result, isErr))
+			switch block.Type {
+			case BlockText:
+				fmt.Println(block.Text)
+			case BlockToolUse:
+				result, isErr := executeTool(block.ToolName, block.ToolInput)
+				log.Printf("[tool] executed %s (is_error=%v)", block.ToolName, isErr)
+				toolResults = append(toolResults, Block{
+					Type:       BlockToolResult,
+					ToolUseID:  block.ToolUseID,
+					ToolResult: result,
+					IsError:    isErr,
+				})
 			}
 		}
 
 		// Exit when model finishes turn without requesting tools
-		if resp.StopReason != anthropic.StopReasonToolUse {
+		if resp.StopReason != "tool_use" {
 			return messages
 		}
 
 		// Append tool results and loop
-		messages = append(messages, anthropic.NewUserMessage(toolResults...))
+		messages = append(messages, Message{
+			Role:    RoleUser,
+			Content: toolResults,
+		})
 	}
 }
 
