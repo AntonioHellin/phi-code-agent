@@ -64,8 +64,7 @@ func main() {
 
 	var messages []Message
 
-	fmt.Println("Phi Agent Code")
-	fmt.Println("Type your prompt or press Ctrl+C to exit.")
+	printBanner(provider)
 
 	for {
 		fmt.Print("\n> ")
@@ -138,11 +137,12 @@ func agentLoop(ctx context.Context, provider Provider, messages []Message) []Mes
 // Errors are returned as tool results (string, isError=true) so the model
 // can observe the failure and attempt self-correction.
 func executeTool(name, rawInput string) (string, bool) {
-	fmt.Printf("[permission required] %s %s\n", name, rawInput)
-	if !confirm("Allow execution?") {
+	fmt.Printf("\n%s%sPermission Required:%s %s%s%s %s\n", colorBold, colorYellow, colorReset, colorBold, name, colorReset, rawInput)
+	if !confirm(fmt.Sprintf("%sAllow execution?%s", colorBold, colorReset)) {
+		fmt.Printf("%sDenied by user%s\n\n", colorRed, colorReset)
 		return "Permission denied by user", true
 	}
-	fmt.Printf("[tool execute] %s\n", name)
+	fmt.Printf("%s▶ Executing %s...%s\n", colorCyan, name, colorReset)
 	switch name {
 	case "bash":
 		var in struct {
@@ -203,7 +203,7 @@ func executeTool(name, rawInput string) (string, bool) {
 }
 
 func confirm(prompt string) bool {
-	fmt.Printf("%s [y/N] ", prompt)
+	fmt.Printf("%s %s[y/N]%s ", prompt, colorGray, colorReset)
 	if !scanner.Scan() {
 		return false
 	}
