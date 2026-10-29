@@ -50,7 +50,7 @@ In [`spinner.go`](../../spinner.go):
 ### B. Startup Session Banner & ANSI Palette (`ui.go`)
 In [`ui.go`](../../ui.go):
 - Defined reusable standard ANSI escape constants (`colorReset`, `colorBold`, `colorCyan`, `colorYellow`, `colorRed`, `colorGray`).
-- `printBanner(provider Provider)`: Dynamically inspects `provider.Model()` and `os.Getwd()` to print an unambiguous session overview on harness boot.
+- `printBanner(provider Provider)`: Renders a stylized Slant ASCII art logo (`PhiCode`) and dynamically inspects `provider.Model()` and `os.Getwd()` to print an unambiguous session overview on harness boot.
 
 ### C. Styled Permission Gate & Clean Loop (`main.go`)
 In [`main.go`](../../main.go):
