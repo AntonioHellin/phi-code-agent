@@ -1,6 +1,6 @@
 module phi-agent-code
 
-go 1.27.3
+go 1.27.0
 
 require github.com/anthropics/anthropic-sdk-go v1.84.0
 
