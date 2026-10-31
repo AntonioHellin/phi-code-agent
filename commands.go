@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -22,6 +23,7 @@ func init() {
 	commands["model"] = command{description: "show or change the model", run: cmdModel}
 	commands["clear"] = command{description: "clear conversation history", run: cmdClear}
 	commands["tools"] = command{description: "list available tools", run: cmdTools}
+	commands["dump"] = command{description: "dump raw conversation messages as JSON (pedagogical testing command)", run: cmdDump}
 	commands["exit"] = command{description: "exit the harness", run: cmdExit}
 	commands["quit"] = command{description: "exit the harness (alias to /exit)", run: cmdExit}
 }
@@ -102,6 +104,21 @@ func cmdTools(_ string) {
 	for _, tool := range tools {
 		fmt.Printf(" %-15s %s\n", tool.Name, tool.Description)
 	}
+}
+
+// cmdDump serializes and displays the conversation messages slice as indented JSON.
+// Note: This command is added specifically in this milestone branch for learning and inspection purposes.
+func cmdDump(_ string) {
+	if len(messages) == 0 {
+		fmt.Println("[] (conversation history is empty)")
+		return
+	}
+	data, err := json.MarshalIndent(messages, "", "  ")
+	if err != nil {
+		fmt.Printf("json error: %v\n", err)
+		return
+	}
+	fmt.Println(string(data))
 }
 
 // cmdExit cleanly terminates the agent harness process.
