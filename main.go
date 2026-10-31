@@ -52,17 +52,20 @@ var scanner = func() *bufio.Scanner {
 	return s
 }()
 
+var (
+    provider Provider
+    messages []Message
+)
+
 func main() {
 	ctx := context.Background()
 	client := anthropic.NewClient()
-	provider := NewAnthropicProvider(
+	provider = NewAnthropicProvider(
 		&client,
 		string(anthropic.ModelClaudeHaiku5_5),
 		8192,
 		systemPrompt,
 	)
-
-	var messages []Message
 
 	printBanner(provider)
 
@@ -73,6 +76,9 @@ func main() {
 		}
 		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
+			continue
+		}
+		if handleCommand(input) {
 			continue
 		}
 		messages = append(messages, Message{
