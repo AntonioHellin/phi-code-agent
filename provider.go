@@ -47,6 +47,18 @@ type Message struct {
 	Content []Block
 }
 
+// HasToolResult reports whether the message contains any tool_result blocks.
+// Used by compaction to find safe split points (a clean conversation
+// boundary is just before a user message that is NOT tool results).
+func (m Message) HasToolResult() bool {
+	for _, b := range m.Content {
+		if b.Type == BlockToolResult {
+			return true
+		}
+	}
+	return false
+}
+
 // ToolDef provides the generic schema contract an LLM needs to invoke a tool.
 type ToolDef struct {
 	Name        string

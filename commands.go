@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -24,6 +25,7 @@ func init() {
 	commands["tools"] = command{description: "list available tools", run: cmdTools}
 	commands["exit"] = command{description: "exit the harness", run: cmdExit}
 	commands["quit"] = command{description: "exit the harness (alias to /exit)", run: cmdExit}
+	commands["compact"] = command{description: "compact conversation history", run: cmdCompact}
 }
 
 // handleCommand intercepts input starting with '/'.
@@ -107,4 +109,20 @@ func cmdTools(_ string) {
 // cmdExit cleanly terminates the agent harness process.
 func cmdExit(_ string) {
 	os.Exit(0)
+}
+
+// cmdCompact triggers compaction manually and displays the before/after message count.
+func cmdCompact(_ string) {
+	if len(messages) == 0 {
+		fmt.Println("no messages to compact")
+		return
+	}
+	before := len(messages)
+	compacted, err := compactor.Compact(context.Background(), messages)
+	if err != nil {
+		fmt.Printf("compact error: %v\n", err)
+		return
+	}
+	messages = compacted
+	fmt.Printf("compacted: %d -> %d messages\n", before, len(messages))
 }

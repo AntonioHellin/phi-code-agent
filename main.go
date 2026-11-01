@@ -53,8 +53,9 @@ var scanner = func() *bufio.Scanner {
 }()
 
 var (
-    provider Provider
-    messages []Message
+	provider  Provider
+	messages  []Message
+	compactor CompactionStrategy = NoCompaction{}
 )
 
 func main() {
@@ -85,6 +86,14 @@ func main() {
 			Role:    RoleUser,
 			Content: []Block{{Type: BlockText, Text: input}},
 		})
+
+		compacted, err := compactor.Compact(ctx, messages)
+		if err != nil {
+			fmt.Printf("compaction error: %v\n", err)
+		} else {
+			messages = compacted
+		}
+
 		messages = agentLoop(ctx, provider, messages)
 	}
 }
