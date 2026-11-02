@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,14 +48,14 @@ func TestSafeSplitPoint(t *testing.T) {
 	// 6: User: "Run tests"
 	// 7: Assistant: "Running tests..."
 	msgs := []Message{
-		userMsg("Hello"),                        // 0
-		assistantTextMsg("Hi"),                  // 1
-		userMsg("Read a file"),                  // 2
+		userMsg("Hello"),                           // 0
+		assistantTextMsg("Hi"),                     // 1
+		userMsg("Read a file"),                     // 2
 		assistantToolUseMsg("call_1", "read_file"), // 3
-		toolResultMsg("call_1", "package main"), // 4 (user role, but tool result!)
-		assistantTextMsg("Here is the content"), // 5
-		userMsg("Run tests"),                    // 6
-		assistantTextMsg("Running tests..."),    // 7
+		toolResultMsg("call_1", "package main"),    // 4 (user role, but tool result!)
+		assistantTextMsg("Here is the content"),    // 5
+		userMsg("Run tests"),                       // 6
+		assistantTextMsg("Running tests..."),       // 7
 	}
 
 	tests := []struct {
@@ -132,14 +135,14 @@ func TestSlidingWindow(t *testing.T) {
 	strategy := &SlidingWindow{KeepLast: 4}
 
 	msgs := []Message{
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 1"}}},                     // 0
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 1"}}},               // 1
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 2: run tool"}}},           // 2
-		{Role: RoleAssistant, Content: []Block{{Type: BlockToolUse, ToolUseID: "t1"}}},            // 3
-		{Role: RoleUser, Content: []Block{{Type: BlockToolResult, ToolUseID: "t1"}}},             // 4
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Tool finished"}}},        // 5
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 3"}}},                     // 6
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 3"}}},               // 7
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 1"}}},           // 0
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 1"}}},     // 1
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 2: run tool"}}}, // 2
+		{Role: RoleAssistant, Content: []Block{{Type: BlockToolUse, ToolUseID: "t1"}}},  // 3
+		{Role: RoleUser, Content: []Block{{Type: BlockToolResult, ToolUseID: "t1"}}},   // 4
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Tool finished"}}}, // 5
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 3"}}},           // 6
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 3"}}},     // 7
 	}
 
 	// len(msgs) = 8, KeepLast = 4 -> desired cut = 8 - 4 = 4.
@@ -165,3 +168,133 @@ func TestSlidingWindow(t *testing.T) {
 	}
 }
 
+func TestWithLogging(t *testing.T) {
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "compactions.log")
+
+	inner := &SlidingWindow{KeepLast: 2}
+	decorator := &WithLogging{
+		Inner:   inner,
+		LogPath: logPath,
+	}
+
+	msgs := []Message{
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "User 1"}}},
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Assistant 1"}}},
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "User 2"}}},
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Assistant 2"}}},
+	}
+
+	res, err := decorator.Compact(context.Background(), msgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(res))
+	}
+
+	// Verify log file was created and written
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read compaction log file: %v", err)
+	}
+	logContent := string(data)
+
+	if !strings.Contains(logContent, "Compacted: 4 -> 2 messages") {
+		t.Fatalf("expected log to contain summary line, got: %s", logContent)
+	}
+	if !strings.Contains(logContent, "User 1") {
+		t.Fatalf("expected log to mention pruned message 'User 1'")
+	}
+	if !strings.Contains(logContent, "User 2") {
+		t.Fatalf("expected log to mention kept message 'User 2'")
+	}
+}
+
+// mockSummaryProvider implements Provider for unit testing Summarize without real API calls.
+type mockSummaryProvider struct {
+	summaryText string
+	called      bool
+}
+
+func (m *mockSummaryProvider) Send(_ context.Context, _ []Message, _ []ToolDef) (Response, error) {
+	m.called = true
+	return Response{
+		Content:    []Block{{Type: BlockText, Text: m.summaryText}},
+		StopReason: "end_turn",
+	}, nil
+}
+
+func (m *mockSummaryProvider) Model() string   { return "mock-model" }
+func (m *mockSummaryProvider) SetModel(_ string) {}
+
+func TestSummarize(t *testing.T) {
+	mock := &mockSummaryProvider{summaryText: "User asked for file operations and tests were executed."}
+	strategy := &Summarize{
+		Provider:   mock,
+		Threshold:  6,
+		KeepRecent: 2,
+	}
+
+	msgs := []Message{
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 1"}}},
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 1"}}},
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 2"}}},
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 2"}}},
+		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 3"}}},
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 3"}}},
+	}
+
+	t.Run("below threshold does not compact", func(t *testing.T) {
+		mock.called = false
+		shortMsgs := msgs[:4]
+		res, err := strategy.Compact(context.Background(), shortMsgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != len(shortMsgs) {
+			t.Fatalf("expected %d messages, got %d", len(shortMsgs), len(res))
+		}
+		if mock.called {
+			t.Fatalf("provider should not have been called when below threshold")
+		}
+	})
+
+	t.Run("at or above threshold compacts with summary", func(t *testing.T) {
+		mock.called = false
+		res, err := strategy.Compact(context.Background(), msgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !mock.called {
+			t.Fatalf("expected provider to be called for summarization")
+		}
+
+		// Desired cut = 6 - 2 = 4 (index 4 is Turn 3, clean user message)
+		// It keeps index 4 and 5 (len = 2)
+		if len(res) != 2 {
+			t.Fatalf("expected 2 kept messages, got %d", len(res))
+		}
+
+		// First message must have summary block prepended to its content
+		if res[0].Role != RoleUser {
+			t.Fatalf("expected first message role to be user, got %s", res[0].Role)
+		}
+		if len(res[0].Content) < 2 {
+			t.Fatalf("expected at least 2 content blocks (summary + original text), got %d", len(res[0].Content))
+		}
+
+		firstBlockText := res[0].Content[0].Text
+		if !strings.Contains(firstBlockText, "[Summary of previous conversation]") {
+			t.Fatalf("expected summary header in block, got: %s", firstBlockText)
+		}
+		if !strings.Contains(firstBlockText, mock.summaryText) {
+			t.Fatalf("expected summary text in block, got: %s", firstBlockText)
+		}
+
+		originalBlockText := res[0].Content[1].Text
+		if originalBlockText != "Turn 3" {
+			t.Fatalf("expected original prompt 'Turn 3' preserved, got: %s", originalBlockText)
+		}
+	})
+}
