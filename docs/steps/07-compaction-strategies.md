@@ -18,7 +18,8 @@ flowchart TD
     Trimmed --> SafeSplit["SafeSplitPoint (Scan backward for clean human turn)"]
     Summarized --> SafeSplit
     SafeSplit --> Guarded["Compacted Message Slice"]
-    Guarded --> Provider["LLM Provider (API Call)"]
+    Guarded --> Logger["WithLogging Decorator (Audit Trail)"]
+    Logger --> Provider["LLM Provider (API Call)"]
 ```
 
 ---
@@ -101,16 +102,17 @@ type CompactionStrategy interface {
 	Compact(ctx context.Context, messages []Message) ([]Message, error)
 }
 
-func SafeSplitPoint(messages []Message, desired int) int {
-	if desired <= 0 {
+func SafeSplitPoint(messages []Message, desiredCutIndex int) int {
+	if desiredCutIndex <= 0 {
 		return 0
 	}
-	if desired >= len(messages) {
+	if desiredCutIndex >= len(messages) {
 		return len(messages)
 	}
-	for i := desired; i > 0; i-- {
-		if messages[i].Role == RoleUser && !messages[i].HasToolResult() {
-			return i
+	for index := desiredCutIndex; index > 0; index-- {
+		targetMessage := messages[index]
+		if targetMessage.Role == RoleUser && !targetMessage.HasToolResult() {
+			return index
 		}
 	}
 	return 0
@@ -126,12 +128,91 @@ type SlidingWindow struct {
 	KeepLast int
 }
 
-func (s *SlidingWindow) Compact(_ context.Context, messages []Message) ([]Message, error) {
-	if len(messages) <= s.KeepLast {
+func (window *SlidingWindow) Compact(_ context.Context, messages []Message) ([]Message, error) {
+	if len(messages) <= window.KeepLast {
 		return messages, nil
 	}
-	split := SafeSplitPoint(messages, len(messages)-s.KeepLast)
-	return messages[split:], nil
+	desiredCutIndex := len(messages) - window.KeepLast
+	safeIndex := SafeSplitPoint(messages, desiredCutIndex)
+	return messages[safeIndex:], nil
+}
+
+type Summarize struct {
+	Provider   Provider
+	Threshold  int
+	KeepRecent int
+}
+
+func (strategy *Summarize) Compact(ctx context.Context, messages []Message) ([]Message, error) {
+	if strategy.Threshold <= 0 || len(messages) < strategy.Threshold {
+		return messages, nil
+	}
+	keepRecentCount := strategy.KeepRecent
+	if keepRecentCount <= 0 {
+		keepRecentCount = 4
+	}
+	desiredCutIndex := len(messages) - keepRecentCount
+	safeSplitIndex := SafeSplitPoint(messages, desiredCutIndex)
+	if safeSplitIndex <= 0 {
+		return messages, nil
+	}
+
+	messagesToSummarize := messages[:safeSplitIndex]
+	messagesToKeep := messages[safeSplitIndex:]
+
+	summaryPrompt := []Message{
+		{
+			Role: RoleUser,
+			Content: []Block{
+				{
+					Type: BlockText,
+					Text: "Provide a concise summary of the following conversation history, preserving key decisions, user goals, and file paths:\n\n" + renderTranscriptText(messagesToSummarize),
+				},
+			},
+		},
+	}
+
+	summaryResponse, err := strategy.Provider.Send(ctx, summaryPrompt, nil)
+	if err != nil {
+		return messages, fmt.Errorf("summarize failed: %w", err)
+	}
+
+	var summaryText string
+	for _, block := range summaryResponse.Content {
+		if block.Type == BlockText {
+			summaryText += block.Text
+		}
+	}
+
+	summaryBlock := Block{
+		Type: BlockText,
+		Text: "[Summary of previous conversation]:\n" + strings.TrimSpace(summaryText) + "\n\n",
+	}
+
+	compactedMessages := make([]Message, len(messagesToKeep))
+	copy(compactedMessages, messagesToKeep)
+	compactedMessages[0] = Message{
+		Role:    compactedMessages[0].Role,
+		Content: append([]Block{summaryBlock}, compactedMessages[0].Content...),
+	}
+
+	return compactedMessages, nil
+}
+
+type WithLogging struct {
+	Inner   CompactionStrategy
+	LogPath string
+}
+
+func (decorator *WithLogging) Compact(ctx context.Context, messages []Message) ([]Message, error) {
+	compactedMessages, err := decorator.Inner.Compact(ctx, messages)
+	if err != nil {
+		return compactedMessages, err
+	}
+	if len(compactedMessages) < len(messages) {
+		decorator.writeLog(messages, compactedMessages)
+	}
+	return compactedMessages, nil
 }
 ```
 
@@ -185,7 +266,7 @@ func cmdCompact(_ string) {
 ## 4. Verification & Exercises
 
 ### Exercise 1: Table-Driven Unit Testing (`compact_test.go`)
-Run the test suite to verify boundary conditions, backward scanning, and tool-use atomicity:
+Run the test suite to verify boundary conditions, backward scanning, tool-use atomicity, decorator logging, and summarization:
 
 ```bash
 go test -v ./...
@@ -196,11 +277,16 @@ go test -v ./...
 - Desired index beyond slice length returns `len(messages)`.
 - Cut index falling on `BlockToolUse` or `BlockToolResult` automatically walks back to the preceding clean human message.
 - `SlidingWindow` preserves tool call atomicity and ensures history never starts with an orphaned tool result.
+- `WithLogging` decorator generates an audit trail of pruned and retained message turns in `compactions.log`.
+- `Summarize` preserves recent turns while compressing older context into a clean human summary block.
 
-### Exercise 2: Interactive Sliding Window Verification
-1. Open [`main.go`](../../main.go) and change `compactor` to:
+### Exercise 2: Interactive Sliding Window Verification with Logging
+1. Open [`main.go`](../../main.go) and wrap the compactor with logging:
    ```go
-   var compactor CompactionStrategy = &SlidingWindow{KeepLast: 4}
+   var compactor CompactionStrategy = &WithLogging{
+       Inner:   &SlidingWindow{KeepLast: 4},
+       LogPath: "compactions.log",
+   }
    ```
 2. Run `go run .`
 3. Execute 3 consecutive turns requiring tool use (e.g. read files or run commands).
@@ -209,4 +295,4 @@ go test -v ./...
    > /compact
    compacted: 8 -> 4 messages
    ```
-5. Confirm that the model continues to reply without any HTTP 400 errors.
+5. Inspect `compactions.log` to view the exact diff of pruned and retained turns.
