@@ -97,12 +97,18 @@ func main() {
 	// 	LogPath: "compactions.log",
 	// }
 
+	inputReader, err := NewInputReader()
+	if err != nil {
+		fmt.Printf("failed to initialize input: %v\n", err)
+		return
+	}
+	defer inputReader.Close()
+
 	for {
-		fmt.Print("\n> ")
-		if !scanner.Scan() {
-			return // EOF or Ctrl+D
+		input, err := inputReader.ReadPrompt()
+		if err != nil {
+			return // EOF (Ctrl+D) o error de lectura
 		}
-		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
 			continue
 		}

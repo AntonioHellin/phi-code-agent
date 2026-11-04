@@ -56,3 +56,28 @@ This document tracks architectural decisions, LLM protocol invariants, and desig
 - **Why**: Unit tests for agent compaction must execute rapidly in CI/CD without network dependencies or paid API keys.
 - **Implementation (`compact_test.go`)**: We implement `mockSummaryProvider` satisfying the `Provider` interface. This enables simulating LLM summary outputs and asserting that summary blocks are prepended into `compactedMessages[0]` without calling Anthropic.
 
+
+
+---
+
+## Milestone 08: Terminal Raw Mode & Advanced Input Architecture
+
+### 1. The Terminal Mode Transition: Canonical vs. Raw Mode
+- **The Problem**: Standard `bufio.Scanner(os.Stdin)` operates in operating system canonical mode, where keystrokes are buffered by the kernel until `Enter` is hit. This prevents intercepting arrow keys (which emit raw ANSI escape sequences like `^[[A`) or gracefully catching `Ctrl+C`.
+- **The Architectural Solution**: We encapsulate `github.com/chzyer/readline` in a dedicated `InputReader` struct ([`input.go`](../../input.go)). This switches the terminal to **Raw Mode**, allowing character-by-character processing, history buffer navigation, and inline editing.
+
+### 2. Terminal Lifecycle Management (`defer inputReader.Close()`)
+- **The Invariant**: A terminal put into Raw Mode by disabling `ENABLE_LINE_INPUT` and `ENABLE_ECHO_INPUT` must be restored before process exit. Failing to restore it corrupts the developer's shell session (unresponsive Enter, broken cursor movement).
+- **Go Pattern**: Pairing constructor initialization with an immediate `defer inputReader.Close()` guarantees cleanup across normal returns, `Ctrl+D` (EOF), and runtime panics.
+
+### 3. The Single-Line Prompt Rendering Invariant
+- **The Failure Mode**: In Raw Mode, `readline` clears and repaints the prompt string (`\r` + `Prompt` + `buffer`) on **every single keystroke**. Placing a newline (`\n`) inside the prompt string corrupts terminal coordinate math, causing a blank newline shift and scrolling for every character typed.
+- **Rule**: Prompt strings inside `readline.Config` must strictly remain single-line (e.g. `"> "` and `"... "`). Inter-turn spacing must be handled outside the prompt redraw loop.
+
+### 4. Multiline Delimited Input Accumulation (`"""`)
+- **Why**: Coding agents frequently receive large pasted code snippets containing embedded newlines. Under canonical `bufio.Scanner`, newlines trigger immediate premature execution.
+- **Implementation**: We implement a stateful accumulator in `ReadPrompt()` triggered by triple quotes `"""`. The prompt temporarily switches to `... ` via `r.rl.SetPrompt("... ")` (with `defer r.rl.SetPrompt("> ")` for guaranteed restoration). Lines accumulate in a memory-efficient `strings.Builder` until the closing `"""` delimiter is entered.
+
+### 5. Non-Destructive Signal Handling (`Ctrl+C`)
+- **Why**: Pressing `Ctrl+C` while drafting a long prompt should discard the current input buffer, not terminate the agent and destroy conversation history.
+- **Implementation**: `readline.ErrInterrupt` is intercepted and mapped to `"", nil`, presenting a clean prompt while preserving the full in-memory conversation state.
