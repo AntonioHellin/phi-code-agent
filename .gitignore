@@ -25,3 +25,4 @@ go.work
 # OS artifacts
 .DS_Store
 Thumbs.db
+compactions.log
