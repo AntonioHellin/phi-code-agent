@@ -70,6 +70,33 @@ func main() {
 
 	printBanner(provider)
 
+	// -------------------------------------------------------------------------
+	// Compaction Strategy Configuration (Composition Root)
+	// Uncomment the strategy you wish to evaluate:
+	// -------------------------------------------------------------------------
+
+	// Option 1: No compaction (Default pass-through: retains all history indefinitely)
+	// compactor = NoCompaction{}
+
+	// Option 2: Sliding Window without logging (retains last K turns, e.g. 6 messages)
+	// compactor = &SlidingWindow{KeepLast: 6}
+
+	// Option 3: Sliding Window WITH Logging (ACTIVE - logs audit trail to compactions.log)
+	compactor = &WithLogging{
+		Inner:   &SlidingWindow{KeepLast: 6},
+		LogPath: "compactions.log",
+	}
+
+	// Option 4: LLM-driven Summarization with Logging (summarizes older turns when threshold reached)
+	// compactor = &WithLogging{
+	// 	Inner: &Summarize{
+	// 		Provider:   provider,
+	// 		Threshold:  8,
+	// 		KeepRecent: 4,
+	// 	},
+	// 	LogPath: "compactions.log",
+	// }
+
 	for {
 		fmt.Print("\n> ")
 		if !scanner.Scan() {
