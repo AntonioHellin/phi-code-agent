@@ -101,8 +101,10 @@ func cmdClear(_ string) {
 
 // cmdTools lists all tools available to the model and their descriptions.
 func cmdTools(_ string) {
-	for _, tool := range tools {
-		fmt.Printf(" %-15s %s\n", tool.Name, tool.Description)
+	definitions := defaultToolRegistry.Definitions()
+	fmt.Printf("Registered tools (%d):\n", len(definitions))
+	for _, tool := range definitions {
+		fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
 	}
 }
 
