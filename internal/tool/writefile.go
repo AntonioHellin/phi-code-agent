@@ -1,21 +1,23 @@
-package main
+package tool
 
 import (
 	"context"
 	"encoding/json"
 	"os"
+
+	"phi-agent-code/internal/api"
 )
 
 // WriteFileTool implements the Tool interface for writing content to files on the local filesystem.
 type WriteFileTool struct{}
 
 func init() {
-	defaultToolRegistry.Register(&WriteFileTool{})
+	DefaultRegistry.Register(&WriteFileTool{})
 }
 
 // Definition returns the JSON Schema declaration for the write_file tool.
-func (WriteFileTool) Definition() ToolDef {
-	return ToolDef{
+func (WriteFileTool) Definition() api.ToolDef {
+	return api.ToolDef{
 		Name:        "write_file",
 		Description: "Write content to a file (creating or overwriting it).",
 		InputSchema: map[string]any{
@@ -50,3 +52,4 @@ func (WriteFileTool) Execute(_ context.Context, rawInput string) (string, bool) 
 
 	return "wrote " + in.Path, false
 }
+

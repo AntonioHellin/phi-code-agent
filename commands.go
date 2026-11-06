@@ -6,6 +6,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"phi-agent-code/internal/tool"
 )
 
 // command defines the metadata and execution handler for a terminal slash command.
@@ -82,14 +84,14 @@ var knownModels = []string{
 // cmdModel displays the active model or dynamically updates it.
 func cmdModel(args string) {
 	if args == "" {
-		fmt.Printf("current: %s\n", provider.Model())
+		fmt.Printf("current: %s\n", prov.Model())
 		fmt.Println("suggestions:")
 		for _, model := range knownModels {
 			fmt.Printf("  %s\n", model)
 		}
 		return
 	}
-	provider.SetModel(args)
+	prov.SetModel(args)
 	fmt.Printf("model: %s\n", args)
 }
 
@@ -101,10 +103,10 @@ func cmdClear(_ string) {
 
 // cmdTools lists all tools available to the model and their descriptions.
 func cmdTools(_ string) {
-	definitions := defaultToolRegistry.Definitions()
+	definitions := tool.DefaultRegistry.Definitions()
 	fmt.Printf("Registered tools (%d):\n", len(definitions))
-	for _, tool := range definitions {
-		fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
+	for _, t := range definitions {
+		fmt.Printf("  - %s: %s\n", t.Name, t.Description)
 	}
 }
 

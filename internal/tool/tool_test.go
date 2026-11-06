@@ -1,4 +1,4 @@
-package main
+package tool
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"phi-agent-code/internal/api"
 )
 
 // mockTool implements the Tool interface for isolated unit testing.
@@ -16,8 +18,8 @@ type mockTool struct {
 	isError     bool
 }
 
-func (m *mockTool) Definition() ToolDef {
-	return ToolDef{
+func (m *mockTool) Definition() api.ToolDef {
+	return api.ToolDef{
 		Name:        m.name,
 		Description: m.description,
 		InputSchema: map[string]any{
@@ -91,13 +93,13 @@ func TestDefaultRegistryContainsNativeTools(t *testing.T) {
 	expectedTools := []string{"bash", "read_file", "write_file"}
 
 	for _, toolName := range expectedTools {
-		tool, exists := defaultToolRegistry.Get(toolName)
+		tInstance, exists := DefaultRegistry.Get(toolName)
 		if !exists {
-			t.Errorf("expected defaultToolRegistry to contain '%s' via init() self-registration", toolName)
+			t.Errorf("expected DefaultRegistry to contain '%s' via init() self-registration", toolName)
 			continue
 		}
 
-		definition := tool.Definition()
+		definition := tInstance.Definition()
 		if definition.Name != toolName {
 			t.Errorf("expected tool name '%s', got '%s'", toolName, definition.Name)
 		}
@@ -111,16 +113,16 @@ func TestDefaultRegistryContainsNativeTools(t *testing.T) {
 }
 
 func TestReadFileToolExecution(t *testing.T) {
-	tool, exists := defaultToolRegistry.Get("read_file")
+	tInstance, exists := DefaultRegistry.Get("read_file")
 	if !exists {
-		t.Fatalf("read_file tool not registered in defaultToolRegistry")
+		t.Fatalf("read_file tool not registered in DefaultRegistry")
 	}
 
 	ctx := context.Background()
 
 	// 1. Test reading non-existent file returns error flag without panicking
 	nonExistentPath := filepath.Join(t.TempDir(), "missing.txt")
-	result, isError := tool.Execute(ctx, `{"path":"`+strings.ReplaceAll(nonExistentPath, `\`, `\\`)+`"}`)
+	result, isError := tInstance.Execute(ctx, `{"path":"`+strings.ReplaceAll(nonExistentPath, `\`, `\\`)+`"}`)
 	if !isError {
 		t.Fatalf("expected isError=true for non-existent file, got false")
 	}
@@ -136,7 +138,7 @@ func TestReadFileToolExecution(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	validResult, validErr := tool.Execute(ctx, `{"path":"`+strings.ReplaceAll(filePath, `\`, `\\`)+`"}`)
+	validResult, validErr := tInstance.Execute(ctx, `{"path":"`+strings.ReplaceAll(filePath, `\`, `\\`)+`"}`)
 	if validErr {
 		t.Fatalf("expected valid file read to succeed, got error: %s", validResult)
 	}
@@ -146,9 +148,9 @@ func TestReadFileToolExecution(t *testing.T) {
 }
 
 func TestWriteFileToolExecution(t *testing.T) {
-	tool, exists := defaultToolRegistry.Get("write_file")
+	tInstance, exists := DefaultRegistry.Get("write_file")
 	if !exists {
-		t.Fatalf("write_file tool not registered in defaultToolRegistry")
+		t.Fatalf("write_file tool not registered in DefaultRegistry")
 	}
 
 	ctx := context.Background()
@@ -159,7 +161,7 @@ func TestWriteFileToolExecution(t *testing.T) {
 	escapedPath := strings.ReplaceAll(filePath, `\`, `\\`)
 	payload := `{"path":"` + escapedPath + `","content":"` + contentToWrite + `"}`
 
-	result, isError := tool.Execute(ctx, payload)
+	result, isError := tInstance.Execute(ctx, payload)
 	if isError {
 		t.Fatalf("expected write_file to succeed, got error: %s", result)
 	}

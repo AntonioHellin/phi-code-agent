@@ -1,4 +1,4 @@
-package main
+package compact
 
 import (
 	"context"
@@ -6,35 +6,37 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"phi-agent-code/internal/api"
 )
 
 func TestSafeSplitPoint(t *testing.T) {
 	// Sample message builders for readability
-	userMsg := func(text string) Message {
-		return Message{
-			Role:    RoleUser,
-			Content: []Block{{Type: BlockText, Text: text}},
+	userMsg := func(text string) api.Message {
+		return api.Message{
+			Role:    api.RoleUser,
+			Content: []api.Block{{Type: api.BlockText, Text: text}},
 		}
 	}
 
-	assistantToolUseMsg := func(id, name string) Message {
-		return Message{
-			Role:    RoleAssistant,
-			Content: []Block{{Type: BlockToolUse, ToolUseID: id, ToolName: name}},
+	assistantToolUseMsg := func(id, name string) api.Message {
+		return api.Message{
+			Role:    api.RoleAssistant,
+			Content: []api.Block{{Type: api.BlockToolUse, ToolUseID: id, ToolName: name}},
 		}
 	}
 
-	toolResultMsg := func(id, result string) Message {
-		return Message{
-			Role:    RoleUser,
-			Content: []Block{{Type: BlockToolResult, ToolUseID: id, ToolResult: result}},
+	toolResultMsg := func(id, result string) api.Message {
+		return api.Message{
+			Role:    api.RoleUser,
+			Content: []api.Block{{Type: api.BlockToolResult, ToolUseID: id, ToolResult: result}},
 		}
 	}
 
-	assistantTextMsg := func(text string) Message {
-		return Message{
-			Role:    RoleAssistant,
-			Content: []Block{{Type: BlockText, Text: text}},
+	assistantTextMsg := func(text string) api.Message {
+		return api.Message{
+			Role:    api.RoleAssistant,
+			Content: []api.Block{{Type: api.BlockText, Text: text}},
 		}
 	}
 
@@ -47,7 +49,7 @@ func TestSafeSplitPoint(t *testing.T) {
 	// 5: Assistant: "Here is the content"
 	// 6: User: "Run tests"
 	// 7: Assistant: "Running tests..."
-	msgs := []Message{
+	msgs := []api.Message{
 		userMsg("Hello"),                           // 0
 		assistantTextMsg("Hi"),                     // 1
 		userMsg("Read a file"),                     // 2
@@ -117,9 +119,9 @@ func TestSafeSplitPoint(t *testing.T) {
 
 func TestNoCompaction(t *testing.T) {
 	strategy := NoCompaction{}
-	msgs := []Message{
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "one"}}},
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "two"}}},
+	msgs := []api.Message{
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "one"}}},
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "two"}}},
 	}
 
 	res, err := strategy.Compact(context.Background(), msgs)
@@ -134,15 +136,15 @@ func TestNoCompaction(t *testing.T) {
 func TestSlidingWindow(t *testing.T) {
 	strategy := &SlidingWindow{KeepLast: 4}
 
-	msgs := []Message{
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 1"}}},           // 0
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 1"}}},     // 1
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 2: run tool"}}}, // 2
-		{Role: RoleAssistant, Content: []Block{{Type: BlockToolUse, ToolUseID: "t1"}}},  // 3
-		{Role: RoleUser, Content: []Block{{Type: BlockToolResult, ToolUseID: "t1"}}},   // 4
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Tool finished"}}}, // 5
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 3"}}},           // 6
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 3"}}},     // 7
+	msgs := []api.Message{
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 1"}}},           // 0
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 1"}}},     // 1
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 2: run tool"}}}, // 2
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockToolUse, ToolUseID: "t1"}}},  // 3
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockToolResult, ToolUseID: "t1"}}},   // 4
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Tool finished"}}}, // 5
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 3"}}},           // 6
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 3"}}},     // 7
 	}
 
 	// len(msgs) = 8, KeepLast = 4 -> desired cut = 8 - 4 = 4.
@@ -178,11 +180,11 @@ func TestWithLogging(t *testing.T) {
 		LogPath: logPath,
 	}
 
-	msgs := []Message{
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "User 1"}}},
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Assistant 1"}}},
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "User 2"}}},
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Assistant 2"}}},
+	msgs := []api.Message{
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "User 1"}}},
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Assistant 1"}}},
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "User 2"}}},
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Assistant 2"}}},
 	}
 
 	res, err := decorator.Compact(context.Background(), msgs)
@@ -211,16 +213,16 @@ func TestWithLogging(t *testing.T) {
 	}
 }
 
-// mockSummaryProvider implements Provider for unit testing Summarize without real API calls.
+// mockSummaryProvider implements provider.Provider for unit testing Summarize without real API calls.
 type mockSummaryProvider struct {
 	summaryText string
 	called      bool
 }
 
-func (m *mockSummaryProvider) Send(_ context.Context, _ []Message, _ []ToolDef) (Response, error) {
+func (m *mockSummaryProvider) Send(_ context.Context, _ []api.Message, _ []api.ToolDef) (api.Response, error) {
 	m.called = true
-	return Response{
-		Content:    []Block{{Type: BlockText, Text: m.summaryText}},
+	return api.Response{
+		Content:    []api.Block{{Type: api.BlockText, Text: m.summaryText}},
 		StopReason: "end_turn",
 	}, nil
 }
@@ -236,13 +238,13 @@ func TestSummarize(t *testing.T) {
 		KeepRecent: 2,
 	}
 
-	msgs := []Message{
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 1"}}},
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 1"}}},
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 2"}}},
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 2"}}},
-		{Role: RoleUser, Content: []Block{{Type: BlockText, Text: "Turn 3"}}},
-		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "Reply 3"}}},
+	msgs := []api.Message{
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 1"}}},
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 1"}}},
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 2"}}},
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 2"}}},
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 3"}}},
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 3"}}},
 	}
 
 	t.Run("below threshold does not compact", func(t *testing.T) {
@@ -277,7 +279,7 @@ func TestSummarize(t *testing.T) {
 		}
 
 		// First message must have summary block prepended to its content
-		if res[0].Role != RoleUser {
+		if res[0].Role != api.RoleUser {
 			t.Fatalf("expected first message role to be user, got %s", res[0].Role)
 		}
 		if len(res[0].Content) < 2 {
@@ -298,3 +300,4 @@ func TestSummarize(t *testing.T) {
 		}
 	})
 }
+

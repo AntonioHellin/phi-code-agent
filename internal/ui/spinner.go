@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"fmt"
@@ -7,12 +7,14 @@ import (
 
 var spinnerFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 
+// Spinner renders an animated CLI spinner in a background goroutine.
 type Spinner struct {
 	stop chan struct{}
 	done chan struct{}
 }
 
-func startSpinner(label string) *Spinner {
+// StartSpinner begins the spinner animation with the given label.
+func StartSpinner(label string) *Spinner {
 	s := &Spinner{stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
@@ -22,7 +24,7 @@ func startSpinner(label string) *Spinner {
 		for {
 			select {
 			case <-s.stop:
-				fmt.Print("\r\033[K") // limpia la línea
+				fmt.Print("\r\033[K") // Erase spinner line
 				return
 			case <-ticker.C:
 				fmt.Printf("\r%c %s", spinnerFrames[i], label)
@@ -33,7 +35,9 @@ func startSpinner(label string) *Spinner {
 	return s
 }
 
+// Stop terminates the spinner and waits for line cleanup.
 func (s *Spinner) Stop() {
 	close(s.stop)
-	<-s.done // bloquea hasta que la goroutine confirme que limpió la línea
+	<-s.done
 }
+

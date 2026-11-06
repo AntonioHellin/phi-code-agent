@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"fmt"
@@ -112,3 +112,4 @@ func (reader *InputReader) ReadPrompt() (string, error) {
 
 	return trimmedLine, nil
 }
+
