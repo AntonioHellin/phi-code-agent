@@ -1,4 +1,6 @@
-package main
+// Package compact provides strategies and decorators for trimming, sliding,
+// and summarizing conversation history while maintaining safe boundary invariants.
+package compact
 
 import (
 	"context"
@@ -6,17 +8,20 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"phi-agent-code/internal/api"
+	"phi-agent-code/internal/provider"
 )
 
 // CompactionStrategy abstracts how conversation history is trimmed or summarized.
 type CompactionStrategy interface {
-	Compact(ctx context.Context, messages []Message) ([]Message, error)
+	Compact(ctx context.Context, messages []api.Message) ([]api.Message, error)
 }
 
 // SafeSplitPoint finds the nearest valid split index at or before desiredCutIndex.
 // It ensures cuts happen on an authentic user turn and never between a
 // tool_use and its corresponding tool_result.
-func SafeSplitPoint(messages []Message, desiredCutIndex int) int {
+func SafeSplitPoint(messages []api.Message, desiredCutIndex int) int {
 	if desiredCutIndex <= 0 {
 		return 0
 	}
@@ -27,7 +32,7 @@ func SafeSplitPoint(messages []Message, desiredCutIndex int) int {
 	// Walk backward to locate a genuine user turn that is NOT a tool result
 	for index := desiredCutIndex; index > 0; index-- {
 		targetMessage := messages[index]
-		if targetMessage.Role == RoleUser && !targetMessage.HasToolResult() {
+		if targetMessage.Role == api.RoleUser && !targetMessage.HasToolResult() {
 			return index
 		}
 	}
@@ -37,7 +42,7 @@ func SafeSplitPoint(messages []Message, desiredCutIndex int) int {
 // NoCompaction is the default — never modifies messages.
 type NoCompaction struct{}
 
-func (NoCompaction) Compact(_ context.Context, messages []Message) ([]Message, error) {
+func (NoCompaction) Compact(_ context.Context, messages []api.Message) ([]api.Message, error) {
 	return messages, nil
 }
 
@@ -47,7 +52,7 @@ type SlidingWindow struct {
 	KeepLast int
 }
 
-func (window *SlidingWindow) Compact(_ context.Context, messages []Message) ([]Message, error) {
+func (window *SlidingWindow) Compact(_ context.Context, messages []api.Message) ([]api.Message, error) {
 	if len(messages) <= window.KeepLast {
 		return messages, nil
 	}
@@ -60,12 +65,12 @@ func (window *SlidingWindow) Compact(_ context.Context, messages []Message) ([]M
 // Summarize uses the LLM provider to summarize old conversation turns
 // once history length reaches Threshold, while retaining KeepRecent turns.
 type Summarize struct {
-	Provider   Provider
+	Provider   provider.Provider
 	Threshold  int
 	KeepRecent int
 }
 
-func (strategy *Summarize) Compact(ctx context.Context, messages []Message) ([]Message, error) {
+func (strategy *Summarize) Compact(ctx context.Context, messages []api.Message) ([]api.Message, error) {
 	if strategy.Threshold <= 0 || len(messages) < strategy.Threshold {
 		return messages, nil
 	}
@@ -84,12 +89,12 @@ func (strategy *Summarize) Compact(ctx context.Context, messages []Message) ([]M
 	messagesToSummarize := messages[:safeSplitIndex]
 	messagesToKeep := messages[safeSplitIndex:]
 
-	summaryPrompt := []Message{
+	summaryPrompt := []api.Message{
 		{
-			Role: RoleUser,
-			Content: []Block{
+			Role: api.RoleUser,
+			Content: []api.Block{
 				{
-					Type: BlockText,
+					Type: api.BlockText,
 					Text: "Provide a concise summary of the following conversation history, preserving key decisions, user goals, and file paths:\n\n" + renderTranscriptText(messagesToSummarize),
 				},
 			},
@@ -103,24 +108,24 @@ func (strategy *Summarize) Compact(ctx context.Context, messages []Message) ([]M
 
 	var summaryText string
 	for _, block := range summaryResponse.Content {
-		if block.Type == BlockText {
+		if block.Type == api.BlockText {
 			summaryText += block.Text
 		}
 	}
 
 	// Prepend summary into the first retained user message (safe split guarantees it is RoleUser).
 	// This preserves strict alternating user/assistant turns without creating duplicate user messages in a row.
-	summaryBlock := Block{
-		Type: BlockText,
+	summaryBlock := api.Block{
+		Type: api.BlockText,
 		Text: "[Summary of previous conversation]:\n" + strings.TrimSpace(summaryText) + "\n\n",
 	}
 
 	// Make a shallow copy of messagesToKeep slice to avoid mutating input backing array directly
-	compactedMessages := make([]Message, len(messagesToKeep))
+	compactedMessages := make([]api.Message, len(messagesToKeep))
 	copy(compactedMessages, messagesToKeep)
-	compactedMessages[0] = Message{
+	compactedMessages[0] = api.Message{
 		Role:    compactedMessages[0].Role,
-		Content: append([]Block{summaryBlock}, compactedMessages[0].Content...),
+		Content: append([]api.Block{summaryBlock}, compactedMessages[0].Content...),
 	}
 
 	return compactedMessages, nil
@@ -133,7 +138,7 @@ type WithLogging struct {
 	LogPath string
 }
 
-func (decorator *WithLogging) Compact(ctx context.Context, messages []Message) ([]Message, error) {
+func (decorator *WithLogging) Compact(ctx context.Context, messages []api.Message) ([]api.Message, error) {
 	compactedMessages, err := decorator.Inner.Compact(ctx, messages)
 	if err != nil {
 		return compactedMessages, err
@@ -144,7 +149,7 @@ func (decorator *WithLogging) Compact(ctx context.Context, messages []Message) (
 	return compactedMessages, nil
 }
 
-func (decorator *WithLogging) writeLog(originalMessages, compactedMessages []Message) {
+func (decorator *WithLogging) writeLog(originalMessages, compactedMessages []api.Message) {
 	if decorator.LogPath == "" {
 		return
 	}
@@ -171,40 +176,40 @@ func (decorator *WithLogging) writeLog(originalMessages, compactedMessages []Mes
 	fmt.Fprintln(logFile, strings.Repeat("-", 50))
 }
 
-func summarizeMessage(message Message) string {
+func summarizeMessage(message api.Message) string {
 	if len(message.Content) == 0 {
 		return "(empty)"
 	}
 	firstBlock := message.Content[0]
 	switch firstBlock.Type {
-	case BlockText:
+	case api.BlockText:
 		text := strings.TrimSpace(firstBlock.Text)
 		if len(text) > 60 {
 			return text[:57] + "..."
 		}
 		return text
-	case BlockToolUse:
+	case api.BlockToolUse:
 		return fmt.Sprintf("tool_use: %s", firstBlock.ToolName)
-	case BlockToolResult:
+	case api.BlockToolResult:
 		return fmt.Sprintf("tool_result: %s", firstBlock.ToolUseID)
 	default:
 		return string(firstBlock.Type)
 	}
 }
 
-func renderTranscriptText(messages []Message) string {
+func renderTranscriptText(messages []api.Message) string {
 	var builder strings.Builder
 	for _, message := range messages {
 		builder.WriteString(string(message.Role))
 		builder.WriteString(":\n")
 		for _, block := range message.Content {
 			switch block.Type {
-			case BlockText:
+			case api.BlockText:
 				builder.WriteString(block.Text)
 				builder.WriteString("\n")
-			case BlockToolUse:
+			case api.BlockToolUse:
 				builder.WriteString(fmt.Sprintf("[tool_use: %s]\n", block.ToolName))
-			case BlockToolResult:
+			case api.BlockToolResult:
 				builder.WriteString(fmt.Sprintf("[tool_result: %s]\n", block.ToolResult))
 			}
 		}
@@ -212,3 +217,4 @@ func renderTranscriptText(messages []Message) string {
 	}
 	return builder.String()
 }
+

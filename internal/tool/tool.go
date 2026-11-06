@@ -1,14 +1,18 @@
-package main
+// Package tool defines the agent Tool interface, the central Registry,
+// and native self-registering tool implementations.
+package tool
 
 import (
 	"context"
+
+	"phi-agent-code/internal/api"
 )
 
 // Tool defines the contract that any agent tool must implement.
-// It decouples schema definition (sent to the LLM) from tool execution.
+// It decouples schema definition (sent to the LLM) from execution.
 type Tool interface {
 	// Definition returns the JSON Schema metadata describing the tool to the LLM.
-	Definition() ToolDef
+	Definition() api.ToolDef
 
 	// Execute runs the tool logic with the provided context and raw JSON arguments.
 	// It returns the output string and a boolean indicating whether execution failed.
@@ -31,27 +35,28 @@ func NewToolRegistry() *Registry {
 	}
 }
 
-// defaultToolRegistry is the global singleton registry populated during init().
-var defaultToolRegistry = NewToolRegistry()
+// DefaultRegistry is the global singleton registry populated during init().
+var DefaultRegistry = NewToolRegistry()
 
 // Register adds a tool to the registry using its definition name as the lookup key.
-func (r *Registry) Register(tool Tool) {
-	r.tools[tool.Definition().Name] = tool
+func (r *Registry) Register(t Tool) {
+	r.tools[t.Definition().Name] = t
 }
 
 // Get retrieves a tool by its registered name.
 // Returns the tool and true if found, or nil and false if not registered.
 func (r *Registry) Get(name string) (Tool, bool) {
-	tool, exists := r.tools[name]
-	return tool, exists
+	t, exists := r.tools[name]
+	return t, exists
 }
 
 // Definitions returns a slice of ToolDef schemas for all currently registered tools.
 // This slice is passed directly to the LLM provider to declare available capabilities.
-func (r *Registry) Definitions() []ToolDef {
-	definitions := make([]ToolDef, 0, len(r.tools))
-	for _, tool := range r.tools {
-		definitions = append(definitions, tool.Definition())
+func (r *Registry) Definitions() []api.ToolDef {
+	definitions := make([]api.ToolDef, 0, len(r.tools))
+	for _, t := range r.tools {
+		definitions = append(definitions, t.Definition())
 	}
 	return definitions
 }
+

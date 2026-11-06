@@ -8,6 +8,12 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+
+	"phi-agent-code/internal/api"
+	"phi-agent-code/internal/compact"
+	"phi-agent-code/internal/provider"
+	"phi-agent-code/internal/tool"
+	"phi-agent-code/internal/ui"
 )
 
 const systemPrompt = `You are a coding assistant running in a terminal. You have three tools:
@@ -20,22 +26,22 @@ var scanner = func() *bufio.Scanner {
 }()
 
 var (
-	provider  Provider
-	messages  []Message
-	compactor CompactionStrategy = NoCompaction{}
+	prov      provider.Provider
+	messages  []api.Message
+	compactor compact.CompactionStrategy = compact.NoCompaction{}
 )
 
 func main() {
 	ctx := context.Background()
 	client := anthropic.NewClient()
-	provider = NewAnthropicProvider(
+	prov = provider.NewAnthropicProvider(
 		&client,
 		string(anthropic.ModelClaudeHaiku5_5),
 		8192,
 		systemPrompt,
 	)
 
-	printBanner(provider)
+	ui.PrintBanner(prov.Model())
 
 	// -------------------------------------------------------------------------
 	// Compaction Strategy Configuration (Composition Root)
@@ -43,28 +49,28 @@ func main() {
 	// -------------------------------------------------------------------------
 
 	// Option 1: No compaction (Default pass-through: retains all history indefinitely)
-	// compactor = NoCompaction{}
+	// compactor = compact.NoCompaction{}
 
 	// Option 2: Sliding Window without logging (retains last K turns, e.g. 6 messages)
-	// compactor = &SlidingWindow{KeepLast: 6}
+	// compactor = &compact.SlidingWindow{KeepLast: 6}
 
 	// Option 3: Sliding Window WITH Logging (ACTIVE - logs audit trail to compactions.log)
-	compactor = &WithLogging{
-		Inner:   &SlidingWindow{KeepLast: 6},
+	compactor = &compact.WithLogging{
+		Inner:   &compact.SlidingWindow{KeepLast: 6},
 		LogPath: "compactions.log",
 	}
 
 	// Option 4: LLM-driven Summarization with Logging (summarizes older turns when threshold reached)
-	// compactor = &WithLogging{
-	// 	Inner: &Summarize{
-	// 		Provider:   provider,
+	// compactor = &compact.WithLogging{
+	// 	Inner: &compact.Summarize{
+	// 		Provider:   prov,
 	// 		Threshold:  8,
 	// 		KeepRecent: 4,
 	// 	},
 	// 	LogPath: "compactions.log",
 	// }
 
-	inputReader, err := NewInputReader()
+	inputReader, err := ui.NewInputReader()
 	if err != nil {
 		fmt.Printf("failed to initialize input: %v\n", err)
 		return
@@ -74,7 +80,7 @@ func main() {
 	for {
 		input, err := inputReader.ReadPrompt()
 		if err != nil {
-			return // EOF (Ctrl+D) o error de lectura
+			return // EOF (Ctrl+D) or read error
 		}
 		if input == "" {
 			continue
@@ -82,9 +88,9 @@ func main() {
 		if handleCommand(input) {
 			continue
 		}
-		messages = append(messages, Message{
-			Role:    RoleUser,
-			Content: []Block{{Type: BlockText, Text: input}},
+		messages = append(messages, api.Message{
+			Role:    api.RoleUser,
+			Content: []api.Block{{Type: api.BlockText, Text: input}},
 		})
 
 		compacted, err := compactor.Compact(ctx, messages)
@@ -94,7 +100,7 @@ func main() {
 			messages = compacted
 		}
 
-		messages = agentLoop(ctx, provider, messages)
+		messages = agentLoop(ctx, prov, messages)
 	}
 }
 
@@ -102,10 +108,10 @@ func main() {
 // It interacts with the LLM solely through the Provider interface abstraction (DIP).
 // Calls the model, executes any requested tools, and loops until
 // the model returns plain text (end_turn).
-func agentLoop(ctx context.Context, provider Provider, messages []Message) []Message {
+func agentLoop(ctx context.Context, p provider.Provider, messages []api.Message) []api.Message {
 	for {
-		sp := startSpinner("thinking...")
-		resp, err := provider.Send(ctx, messages, defaultToolRegistry.Definitions())
+		sp := ui.StartSpinner("thinking...")
+		resp, err := p.Send(ctx, messages, tool.DefaultRegistry.Definitions())
 		sp.Stop()
 		if err != nil {
 			fmt.Printf("api error: %v\n", err)
@@ -113,21 +119,21 @@ func agentLoop(ctx context.Context, provider Provider, messages []Message) []Mes
 		}
 
 		// Record assistant response in conversation history
-		messages = append(messages, Message{
-			Role:    RoleAssistant,
+		messages = append(messages, api.Message{
+			Role:    api.RoleAssistant,
 			Content: resp.Content,
 		})
 
-		var toolResults []Block
+		var toolResults []api.Block
 		for _, block := range resp.Content {
 			switch block.Type {
-			case BlockText:
+			case api.BlockText:
 				fmt.Println(block.Text)
-			case BlockToolUse:
+			case api.BlockToolUse:
 				result, isErr := executeTool(block.ToolName, block.ToolInput)
 
-				toolResults = append(toolResults, Block{
-					Type:       BlockToolResult,
+				toolResults = append(toolResults, api.Block{
+					Type:       api.BlockToolResult,
 					ToolUseID:  block.ToolUseID,
 					ToolResult: result,
 					IsError:    isErr,
@@ -141,8 +147,8 @@ func agentLoop(ctx context.Context, provider Provider, messages []Message) []Mes
 		}
 
 		// Append tool results and loop
-		messages = append(messages, Message{
-			Role:    RoleUser,
+		messages = append(messages, api.Message{
+			Role:    api.RoleUser,
 			Content: toolResults,
 		})
 	}
@@ -152,21 +158,21 @@ func agentLoop(ctx context.Context, provider Provider, messages []Message) []Mes
 // Errors are returned as tool results (string, isError=true) so the model
 // can observe the failure and attempt self-correction.
 func executeTool(name, rawInput string) (string, bool) {
-	fmt.Printf("\n%s%sPermission Required:%s %s%s%s %s\n", colorBold, colorYellow, colorReset, colorBold, name, colorReset, rawInput)
-	if !confirm(fmt.Sprintf("%sAllow execution?%s", colorBold, colorReset)) {
-		fmt.Printf("%sDenied by user%s\n\n", colorRed, colorReset)
+	fmt.Printf("\n%s%sPermission Required:%s %s%s%s %s\n", ui.ColorBold, ui.ColorYellow, ui.ColorReset, ui.ColorBold, name, ui.ColorReset, rawInput)
+	if !confirm(fmt.Sprintf("%sAllow execution?%s", ui.ColorBold, ui.ColorReset)) {
+		fmt.Printf("%sDenied by user%s\n\n", ui.ColorRed, ui.ColorReset)
 		return "Permission denied by user", true
 	}
-	fmt.Printf("%s▶ Executing %s...%s\n", colorCyan, name, colorReset)
-	tool, exists := defaultToolRegistry.Get(name)
+	fmt.Printf("%s▶ Executing %s...%s\n", ui.ColorCyan, name, ui.ColorReset)
+	t, exists := tool.DefaultRegistry.Get(name)
 	if !exists {
-    	return fmt.Sprintf("unknown tool: %s", name), true
+		return fmt.Sprintf("unknown tool: %s", name), true
 	}
-	return tool.Execute(context.Background(), rawInput)
+	return t.Execute(context.Background(), rawInput)
 }
 
 func confirm(prompt string) bool {
-	fmt.Printf("%s %s[y/N]%s ", prompt, colorGray, colorReset)
+	fmt.Printf("%s %s[y/N]%s ", prompt, ui.ColorGray, ui.ColorReset)
 	if !scanner.Scan() {
 		return false
 	}

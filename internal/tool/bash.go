@@ -1,4 +1,4 @@
-package main
+package tool
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+
+	"phi-agent-code/internal/api"
 )
 
 // BashTool implements the Tool interface for executing shell commands on the host OS.
@@ -14,12 +16,12 @@ import (
 type BashTool struct{}
 
 func init() {
-	defaultToolRegistry.Register(&BashTool{})
+	DefaultRegistry.Register(&BashTool{})
 }
 
 // Definition returns the JSON Schema metadata describing the bash tool to the LLM provider.
-func (BashTool) Definition() ToolDef {
-	return ToolDef{
+func (BashTool) Definition() api.ToolDef {
+	return api.ToolDef{
 		Name:        "bash",
 		Description: "Run a shell command and return its combined stdout/stderr.",
 		InputSchema: map[string]any{
@@ -63,3 +65,4 @@ func (BashTool) Execute(ctx context.Context, rawInput string) (string, bool) {
 	}
 	return string(out), false
 }
+
