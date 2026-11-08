@@ -25,9 +25,10 @@ func init() {
 	commands["model"] = command{description: "show or change the model", run: cmdModel}
 	commands["clear"] = command{description: "clear conversation history", run: cmdClear}
 	commands["tools"] = command{description: "list available tools", run: cmdTools}
+	commands["subagents"] = command{description: "list available subagent profiles", run: cmdSubagents}
+	commands["compact"] = command{description: "compact conversation history", run: cmdCompact}
 	commands["exit"] = command{description: "exit the harness", run: cmdExit}
 	commands["quit"] = command{description: "exit the harness (alias to /exit)", run: cmdExit}
-	commands["compact"] = command{description: "compact conversation history", run: cmdCompact}
 }
 
 // handleCommand intercepts input starting with '/'.
@@ -97,7 +98,9 @@ func cmdModel(args string) {
 
 // cmdClear resets the in-memory conversation history without reallocating backing memory.
 func cmdClear(_ string) {
-	messages = messages[:0]
+	if rootAgent != nil {
+		rootAgent.Clear()
+	}
 	fmt.Println("conversation cleared")
 }
 
@@ -110,6 +113,12 @@ func cmdTools(_ string) {
 	}
 }
 
+// cmdSubagents lists all available subagent profiles and their capabilities.
+func cmdSubagents(_ string) {
+	fmt.Println("Available subagent profiles (1):")
+	fmt.Println("  - researcher: Read-only codebase explorer. Inspects files without write/bash access.")
+}
+
 // cmdExit cleanly terminates the agent harness process.
 func cmdExit(_ string) {
 	os.Exit(0)
@@ -117,16 +126,16 @@ func cmdExit(_ string) {
 
 // cmdCompact triggers compaction manually and displays the before/after message count.
 func cmdCompact(_ string) {
-	if len(messages) == 0 {
+	if rootAgent == nil || len(rootAgent.Messages()) == 0 {
 		fmt.Println("no messages to compact")
 		return
 	}
-	before := len(messages)
-	compacted, err := compactor.Compact(context.Background(), messages)
+	currentMessages := rootAgent.Messages()
+	before := len(currentMessages)
+	compacted, err := compactor.Compact(context.Background(), currentMessages)
 	if err != nil {
 		fmt.Printf("compact error: %v\n", err)
 		return
 	}
-	messages = compacted
-	fmt.Printf("compacted: %d -> %d messages\n", before, len(messages))
+	fmt.Printf("compacted: %d -> %d messages\n", before, len(compacted))
 }
