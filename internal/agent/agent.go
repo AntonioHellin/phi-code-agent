@@ -12,7 +12,6 @@ import (
 	"phi-agent-code/internal/compact"
 	"phi-agent-code/internal/provider"
 	"phi-agent-code/internal/tool"
-	"phi-agent-code/internal/ui"
 )
 
 // Agent coordinates conversational LLM inference and tool execution in an isolated loop.
@@ -87,15 +86,7 @@ func (agentInstance *Agent) Run(ctx context.Context, prompt string) (string, err
 			return "", fmt.Errorf("agent '%s' reached maximum turn limit (%d)", agentInstance.Name, agentInstance.MaxTurns)
 		}
 
-		var spinnerInstance *ui.Spinner
-		if agentInstance.Verbose {
-			spinnerInstance = ui.StartSpinner(fmt.Sprintf("%sthinking...%s", ui.ColorGray, ui.ColorReset))
-		}
-
 		providerResponse, err := agentInstance.Provider.Send(ctx, agentInstance.messages, agentInstance.Tools.Definitions())
-		if spinnerInstance != nil {
-			spinnerInstance.Stop()
-		}
 		if err != nil {
 			return "", fmt.Errorf("provider error: %w", err)
 		}
