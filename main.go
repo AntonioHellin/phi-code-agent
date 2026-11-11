@@ -8,6 +8,7 @@ import (
 
 	"phi-agent-code/internal/agent"
 	"phi-agent-code/internal/compact"
+	"phi-agent-code/internal/permission"
 	"phi-agent-code/internal/provider"
 	"phi-agent-code/internal/tool"
 	"phi-agent-code/internal/ui"
@@ -64,6 +65,7 @@ func main() {
 	// Instantiate the root interactive agent with complete tool registry and interactive confirmation
 	rootAgent = agent.New(agent.Agent{
 		Name:      "root",
+		Policy:    permission.ReadOnlyPolicy{},
 		Provider:  prov,
 		Tools:     tool.DefaultRegistry,
 		Compactor: compactor,
