@@ -53,7 +53,7 @@ All milestones are organized into two clear phases: **Phase 1: The Core Arc** (e
 
 | Step | Milestone | Key Concepts & Architecture | Guide | Snapshot Branch |
 |:---:|---|---|:---:|:---:|
-| **01** | **The Minimal Loop** | Outer REPL + inner agent loop + Anthropic API + ash, ead_file, write_file tools. | [Read Guide](docs/steps/01-minimal-loop.md) | step/01-minimal-loop |
+| **01** | **The Minimal Loop** | Outer REPL + inner agent loop + Anthropic API + `bash`, `read_file`, `write_file` tools. | [Read Guide](docs/steps/01-minimal-loop.md) | step/01-minimal-loop |
 | **02** | **The Permission Gate** | Intercepting tool calls for user confirmation; errors-as-results contract. | [Read Guide](docs/steps/02-permission-gate.md) | step/02-permission-gate |
 | **03** | **Provider Abstraction** | Decoupling the engine from Anthropic with an agnostic Provider interface. | [Read Guide](docs/steps/03-provider-interface.md) | step/03-provider-interface |
 | **04** | **Terminal Polish & UX** | Dynamic terminal width detection, banner rendering, and live spinner. | [Read Guide](docs/steps/04-terminal-polish.md) | step/04-terminal-polish |
@@ -71,7 +71,7 @@ All milestones are organized into two clear phases: **Phase 1: The Core Arc** (e
 
 | Step | Milestone | Key Concepts & Architecture | Guide | Snapshot Branch |
 |:---:|---|---|:---:|:---:|
-| **14** | **Permission Policies** | Pluggable policies (AlwaysAsk, AllowList, AutoAccept, path-scoped restrictions) in internal/policy. | [Read Guide](docs/steps/14-permission-policies.md) | step/14-permission-policies |
+| **14** | **Permission Policies** | Pluggable policies (AlwaysAsk, AllowList, AutoAccept, path-scoped restrictions) in internal/permission. | [Read Guide](docs/steps/14-permission-policies.md) | step/14-permission-policies |
 | **15** | **Tool Error Retry** | Automatic retry handling for transient errors before returning to the model in internal/tool. | [Read Guide](docs/steps/15-tool-retry.md) | step/15-tool-retry |
 | **16** | **Alternative Providers & Mocks** | Adding OpenAI, Ollama, and a deterministic MockProvider for testing in internal/provider. | [Read Guide](docs/steps/16-providers-and-mocks.md) | step/16-providers-and-mocks |
 | **17** | **Streaming Responses** | Real-time token streaming from the model to the terminal output. | [Read Guide](docs/steps/17-streaming-responses.md) | step/17-streaming-responses |
@@ -82,7 +82,7 @@ All milestones are organized into two clear phases: **Phase 1: The Core Arc** (e
 | **22** | **Project Context via AGENTS.md** | Injecting repository-specific instructions into system prompts on boot. | [Read Guide](docs/steps/22-agents-md-context.md) | step/22-agents-md-context |
 | **23** | **Persistent Agent Memory** | Pluggable KV memory store for retaining cross-session knowledge and preferences in internal/memory. | [Read Guide](docs/steps/23-persistent-memory.md) | step/23-persistent-memory |
 | **24** | **Multimodal & Image Inputs** | Handling image files and binary attachments in user prompts in internal/api. | [Read Guide](docs/steps/24-image-inputs.md) | step/24-image-inputs |
-| **25** | **Custom Tools Suite** | Extending the harness with git_diff, grep, and ile_search tools in internal/tool. | [Read Guide](docs/steps/25-custom-tools.md) | step/25-custom-tools |
+| **25** | **Custom Tools Suite** | Extending the harness with git_diff, grep, and file_search tools in internal/tool. | [Read Guide](docs/steps/25-custom-tools.md) | step/25-custom-tools |
 | **26** | **Transcript Renderer** | Exporting and formatting full conversation traces to Markdown and HTML in internal/ui. | [Read Guide](docs/steps/26-transcript-renderer.md) | step/26-transcript-renderer |
 | **27** | **Markdown-Configured Subagents** | Defining specialized subagents declaratively from YAML/Markdown files in internal/subagent. | [Read Guide](docs/steps/27-markdown-subagents.md) | step/27-markdown-subagents |
 
