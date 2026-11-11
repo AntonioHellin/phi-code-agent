@@ -18,6 +18,8 @@ This file provides architectural guidelines and operational instructions for AI 
    - The harness must work seamlessly on both Windows (PowerShell/cmd.exe/Git bash) and POSIX systems (Linux/macOS).
 4. **Git & Commit Conventions**:
    - Use strict **Conventional Commits** (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
+   - When committing on milestone branches (`step/*`), prefix the commit with the step branch (e.g. `step/13-harness-testing: test: implement comprehensive agent loop tests`). The repository hook in `.githooks/prepare-commit-msg` enforces this automatically.
+   - When committing on `master` or general utility branches (`fix/*`, `refactor/*`), use standard conventional commits.
    - NEVER add AI co-author attributions (such as "Co-Authored-By: Assistant").
 
 ## Build & Test Commands
@@ -31,8 +33,14 @@ go build ./...
 
 # Static analysis
 go vet ./...
+
+# Run complete automated test suite
+go test ./...
+
+# Run tests with verbose output
+go test -v ./...
 ```
 
 ## Milestone Documentation
 
-Detailed step-by-step guides with architecture diagrams and verification scenarios live under `docs/steps/` (`01-minimal-loop.md` to `27-harness-testing.md`).
+Detailed step-by-step guides with architecture diagrams and verification scenarios live under `docs/steps/` (`01-minimal-loop.md` to `27-markdown-subagents.md`).
