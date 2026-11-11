@@ -10,24 +10,26 @@ In this step, we enhance the permission gate for `write_file` to compute and ren
 flowchart TD
     Write["Model calls write_file(path, newContent)"] --> Check{"File exists?"}
     Check -- "Yes" --> Diff["Compute unified diff (existing vs newContent)"]
-    Check -- "No" --> NewFile["Format as (+ 50 lines new file)"]
-    Diff --> Render["Display colored diff in terminal (+green, -red)"]
+    Check -- "No" --> NewFile["Format as (+ N lines new file)"]
+    Diff --> Render["Stream colored diff to TUI Viewport (+green, -red)"]
     NewFile --> Render
-    Render --> Gate{"User Approval [y/N]"}
-    Gate -- "Approved" --> Disk["Write to disk"]
-    Gate -- "Denied" --> Deny["Return rejection to model"]
+    Render --> Gate["Dispatch ApprovalRequest to TUI (stateAwaitingApproval)"]
+    Gate --> UserChoice{"User Keypress [y/N]"}
+    UserChoice -- "y (Approved)" --> Disk["Write to disk"]
+    UserChoice -- "n (Denied)" --> Deny["Return rejection (is_error=true) to model"]
 ```
 
 ## 2. Key Design Principles
 
-- **Readable Code Reviews**: The user should review agent file changes the exact same way they review a GitHub PR.
-- **Safety Previews**: Never write bytes to disk until the diff has been explicitly vetted.
+- **Readable Code Reviews**: The user reviews agent file changes the exact same way they review a GitHub PR.
+- **Safety Previews**: Never write bytes to disk until the diff has been explicitly inspected and confirmed.
+- **Bubble Tea TUI Integration**: The colored diff lines are written to standard output, captured by the stdout pipe redirect, and smoothly rendered into the scrollable viewport. The confirmation then seamlessly activates the TUI's amber approval box (`stateAwaitingApproval`).
 
 ## 3. Implementation Requirements
 
-1. Integrate a diff library (e.g. `pmezard/go-difflib` or standard unified diff generator).
-2. Intercept `write_file` in the permission gate to display red/green diff lines.
-3. Prompt for confirmation after displaying the diff.
+1. Integrate a diff computation helper in `internal/tool/` or `internal/ui/` (e.g. using `pmezard/go-difflib` or standard unified diff algorithm).
+2. Intercept `write_file` in the permission policy or tool execution layer to generate red/green diff text.
+3. Deliver the confirmation prompt through the harness `Confirm` / `ApprovalRequest` mechanism.
 
 ## 4. Verification & Exercises
 
@@ -46,6 +48,7 @@ flowchart TD
 +// Version 2.0
  # Phi Agent Code
 
-Apply changes? [y/N]:
+[permission required] Apply changes to README.md? [y/N]
 ```
-
+- Approving writes the change to disk and returns success.
+- Denying preserves the original file and returns `"Permission denied by user"`.

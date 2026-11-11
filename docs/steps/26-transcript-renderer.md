@@ -8,7 +8,7 @@ The **Transcript Renderer** exports the full conversation history (user messages
 
 ```mermaid
 flowchart LR
-    State["Conversation State"] --> Renderer["Transcript Renderer"]
+    Messages["Conversation History ([]api.Message)"] --> Renderer["Transcript Renderer"]
     Renderer --> MD["transcript.md (GitHub Flavored Markdown)"]
     Renderer --> HTML["transcript.html (Standalone visual trace)"]
 ```
@@ -16,12 +16,16 @@ flowchart LR
 ## 2. Key Design Principles
 
 - **Complete Traceability**: Every tool call, its parameters, and the raw exit code/stdout are rendered in collapsible or fenced blocks.
-- **Redaction of Sensitive Secrets**: Automatically mask API keys or environment secrets before writing transcripts to disk.
+- **Stateless Message Rendering**: In alignment with [Step 06: Conversation State](./06-conversation-state.md), the renderer operates directly on `[]api.Message` without requiring a complex wrapper class.
+- **Redaction of Sensitive Secrets**: Automatically mask API keys, auth tokens, or environment secrets before writing transcripts to disk.
 
 ## 3. Implementation Requirements
 
-1. Create a `RenderTranscript(conv *Conversation, format string) (string, error)` function.
-2. Add a `/transcript` or `/export` slash command to write `session-transcript.md` on demand.
+1. Create `internal/transcript/render.go`:
+   ```go
+   func RenderTranscript(messages []api.Message, format string) (string, error)
+   ```
+2. Add a `/transcript` or `/export` slash command in `internal/ui/` to write `session-transcript.md` on demand.
 
 ## 4. Verification & Exercises
 
@@ -35,4 +39,3 @@ flowchart LR
    ```
 4. Output: `Transcript written to transcript-<timestamp>.md`.
 5. Open the file: verify markdown contains code blocks with the exact tool commands and outputs.
-

@@ -4,48 +4,45 @@
 
 Modern frontier models (Claude 3.5/3.7, GPT-4o) are natively multimodal. Software engineering agents often need to inspect UI screenshots, architectural mockups, diagrams, or bug reports containing images.
 
-In this step, we enhance our message representation to accept binary image blocks alongside standard text:
+In this step, we enhance our tagged struct message representation in `internal/api/types.go` to accept binary image blocks alongside standard text:
 
 ```mermaid
 classDiagram
-    class ContentBlock {
-        <<interface>>
+    class BlockType {
+        <<enumeration>>
+        BlockText
+        BlockToolUse
+        BlockToolResult
+        BlockImage
     }
-    class TextBlock {
+    class Block {
+        +Type BlockType
         +Text string
-    }
-    class ImageBlock {
-        +MediaType string
-        +Data []byte
-    }
-    class ToolUseBlock {
-        +ID string
-        +Name string
-        +Input string
-    }
-    class ToolResultBlock {
         +ToolUseID string
-        +Content string
+        +ToolName string
+        +ToolInput string
+        +ToolResult string
         +IsError bool
+        +ImageMediaType string
+        +ImageData []byte
     }
-
-    ContentBlock <|.. TextBlock
-    ContentBlock <|.. ImageBlock
-    ContentBlock <|.. ToolUseBlock
-    ContentBlock <|.. ToolResultBlock
+    BlockType <-- Block : Tagged With
 ```
 
 ## 2. Key Design Principles
 
-- **Automatic Format Detection**: Detect MIME types (`image/png`, `image/jpeg`, `image/webp`) from file extensions or magic bytes.
-- **Base64 Encoding**: Normalize local image files into base64 payloads required by LLM APIs.
-- **CLI Syntax Support**: Allow users to attach images using special syntax, e.g. `@path/to/diagram.png`.
+- **Tagged Struct Invariant**: Rather than introducing an interface hierarchy that requires complex type-assertions throughout the codebase, we maintain the vendor-agnostic **Tagged Struct pattern** established in `internal/api/types.go` by adding `BlockImage`, `ImageMediaType`, and `ImageData`.
+- **Automatic Format Detection**: Detect MIME types (`image/png`, `image/jpeg`, `image/webp`, `image/gif`) from file extensions or magic bytes.
+- **Base64 Encoding**: Normalize local image files into base64 payloads required by LLM wire formats inside `internal/provider/provider.go`.
+- **CLI Syntax Support**: Allow users to attach images using concise syntax, e.g. `@path/to/diagram.png`.
 
 ## 3. Implementation Requirements
 
-1. Add `ImageBlock` to our domain types.
-2. Update user input parser to detect `@<filename>` image attachments.
-3. Update provider adapters to map `ImageBlock` to provider-specific payloads.
+1. Extend `internal/api/types.go`:
+   - Add `BlockImage BlockType = "image"`.
+   - Add `ImageMediaType string` and `ImageData []byte` to `api.Block`.
+2. Update user input parser in `internal/ui/` to detect `@<filename>` image attachments and read file bytes.
+3. Update `internal/provider/provider.go` to map `BlockImage` into `anthropic.ImageBlockParam`.
 
 ## 4. Verification & Exercises
 
@@ -58,6 +55,5 @@ Verify that attaching a local image allows the model to reason about visual deta
 ```
 
 **Expected Interaction & Output:**
-- Harness detects the image path, reads the bytes, and attaches an `ImageBlock`.
+- Harness detects the image path, reads the bytes, and attaches a `BlockImage`.
 - Model describes the diagram components (e.g. database, cache, API gateway) correctly.
-
