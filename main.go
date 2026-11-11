@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -20,13 +17,6 @@ import (
 const systemPrompt = `You are a coding assistant running in a terminal. You have tools:
 bash, read_file, write_file, delegate. Be concise.`
 
-// scanner provides buffered standard input reading for interactive confirmation prompts.
-var scanner = func() *bufio.Scanner {
-	s := bufio.NewScanner(os.Stdin)
-	s.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	return s
-}()
-
 // Global application references shared across command handlers and delegation tools.
 var (
 	prov      provider.Provider
@@ -35,11 +25,6 @@ var (
 )
 
 func main() {
-	// =========================================================================
-	// 1. Composition Root: Dependency Wiring & Initialization
-	// =========================================================================
-	ctx := context.Background()
-
 	// Initialize concrete Anthropic LLM provider adapter
 	anthropicClient := anthropic.NewClient()
 	prov = provider.NewAnthropicProvider(
@@ -48,9 +33,6 @@ func main() {
 		8192,
 		systemPrompt,
 	)
-
-	// Display CLI startup banner with active model and current working directory
-	ui.PrintBanner(prov.Model())
 
 	// -------------------------------------------------------------------------
 	// Compaction Strategy Configuration (Composition Root)
@@ -87,48 +69,30 @@ func main() {
 		Compactor: compactor,
 		MaxTurns:  20,
 		Verbose:   true,
-		Confirm:   confirm,
 	})
 
-	// Initialize terminal raw-mode readline reader with history and multiline prompt support
-	inputReader, err := ui.NewInputReader()
+	// Definimos el runner que la TUI llamará cuando el usuario pulse Enter
+	runner := func(ctx context.Context, input string) error {
+		if handleCommand(input) {
+			return nil
+		}
+		_, err := rootAgent.Run(ctx, input)
+		return err
+	}
+
+	// Inicializamos la TUI (pipe y escáner quedan encapsulados dentro)
+	app, err := ui.NewProgram(runner)
 	if err != nil {
-		fmt.Printf("failed to initialize input: %v\n", err)
+		fmt.Printf("failed to initialize TUI: %v\n", err)
 		return
 	}
-	defer inputReader.Close()
 
-	// =========================================================================
-	// 2. Outer Loop: Interactive REPL (Read-Eval-Print Loop)
-	// =========================================================================
-	for {
-		userInput, err := inputReader.ReadPrompt()
-		if err != nil {
-			return // Graceful exit on EOF (Ctrl+D) or terminal IO error
-		}
-		if userInput == "" {
-			continue // Skip empty input
-		}
+	// Display CLI startup banner with active model and current working directory
+	ui.PrintBanner(prov.Model())
 
-		// Intercept and execute local slash commands (e.g. /help, /tools, /clear, /subagents)
-		if handleCommand(userInput) {
-			continue
-		}
-
-		// Dispatch user instruction to the root agent's inner ReAct execution loop
-		_, err = rootAgent.Run(ctx, userInput)
-		if err != nil {
-			fmt.Printf("agent error: %v\n", err)
-		}
+	// Conectamos la confirmación interactiva y arrancamos
+	rootAgent.Confirm = app.Confirm
+	if err := app.Run(); err != nil {
+		fmt.Printf("TUI error: %v\n", err)
 	}
-}
-
-// confirm prompts the user for interactive terminal authorization before executing sensitive tools.
-func confirm(prompt string) bool {
-	fmt.Printf("%s %s[y/N]%s ", prompt, ui.ColorGray, ui.ColorReset)
-	if !scanner.Scan() {
-		return false
-	}
-	line := strings.TrimSpace(strings.ToLower(scanner.Text()))
-	return line == "y" || line == "yes"
 }
