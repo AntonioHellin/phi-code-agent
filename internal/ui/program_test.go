@@ -343,6 +343,9 @@ func TestRenderBannerVisual(t *testing.T) {
 	if !strings.Contains(banner, "test-model") {
 		t.Errorf("expected banner to contain model name")
 	}
+	if !strings.Contains(banner, "Ctrl+D to exit") {
+		t.Errorf("expected banner to instruct Ctrl+D to exit, got %q", banner)
+	}
 	t.Logf("\n%s", banner)
 }
 

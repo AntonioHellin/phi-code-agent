@@ -140,7 +140,7 @@ func RenderBanner(model string, frame int) string {
 	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("%sModel:    %s %s\n", ColorGray, ColorReset, model))
 	sb.WriteString(fmt.Sprintf("%sDirectory:%s %s\n", ColorGray, ColorReset, cwd))
-	sb.WriteString(fmt.Sprintf("%sCommands: %s Type your prompt or press Ctrl+C to exit.\n", ColorGray, ColorReset))
+	sb.WriteString(fmt.Sprintf("%sCommands: %s Type your prompt or press Ctrl+D to exit.\n", ColorGray, ColorReset))
 	sb.WriteString("\n")
 	return sb.String()
 }
