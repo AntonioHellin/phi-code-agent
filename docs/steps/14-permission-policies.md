@@ -2,47 +2,49 @@
 
 ## 1. Architectural Overview
 
-Prompting the user for every single command (including read-only actions like `read_file` or `cat`) creates alert fatigue. Users start pressing `y` without inspecting the commands, completely defeating the purpose of the security gate.
+Prompting the user for every single command (including read-only actions like `read_file` or inspecting directories) creates alert fatigue. Users start pressing `y` without inspecting the commands, completely defeating the purpose of the security gate.
 
-In this step, we decouple the permission check from a hardcoded `confirm()` call into a pluggable **Permission Policy Engine**:
+In this step, we decouple the permission check from a hardcoded `confirm()` call into a pluggable **Permission Policy Engine** in `internal/permission/`:
 
 ```mermaid
 classDiagram
-    class PermissionPolicy {
+    class Policy {
         <<interface>>
-        +Authorize(toolName string, rawInput string) PolicyDecision
+        +Authorize(toolName string, rawInput string) Decision
     }
-    class PolicyDecision {
+    class Decision {
         <<enumeration>>
+        AskUser
         Allow
         Deny
-        AskUser
     }
     class AlwaysAskPolicy
-    class ReadOnlyAutoAllowPolicy
-    class AllowListPolicy
+    class ReadOnlyPolicy
 
-    PermissionPolicy <|.. AlwaysAskPolicy
-    PermissionPolicy <|.. ReadOnlyAutoAllowPolicy
-    PermissionPolicy <|.. AllowListPolicy
+    Policy <|.. AlwaysAskPolicy
+    Policy <|.. ReadOnlyPolicy
+    Decision <-- Policy : Returns
 ```
 
 ## 2. Key Design Principles
 
-- **Separation of Concerns**: The agent loop asks a policy whether an action is permitted. The loop does not know or care *how* that decision is made.
+- **Separation of Concerns**: The agent loop queries a policy whether an action is permitted. The loop does not know or care *how* that decision is determined.
+- **Fail-Safe Defaults (Zero-Value Safety)**: In Go, `AskUser` is defined as `iota = 0`. An uninitialized `Decision` always defaults to safely asking the user rather than silently executing side-effecting commands.
 - **Granular Decisions**:
-  - `Allow`: Executes immediately without prompting (e.g., safe read operations).
-  - `AskUser`: Prompts the user with `[y/N]`.
-  - `Deny`: Rejects immediately without bothering the user (e.g., blacklisted paths or commands like `rm -rf /`).
-- **Defensibility Against Alert Fatigue**: By automatically approving non-destructive queries, the user's attention is reserved for write, delete, and shell operations.
+  - `Allow`: Executes immediately without prompting (e.g., non-destructive read operations).
+  - `AskUser`: Prompts the user with `[y/N]` via the interactive TUI.
+  - `Deny`: Rejects immediately with `(error, true)` without bothering the user.
+- **Defensibility Against Alert Fatigue**: Automatically approving non-destructive queries reserves human attention for write, delete, and shell operations.
 
 ## 3. Implementation Requirements
 
-1. Define the `PermissionPolicy` interface and `PolicyDecision` type.
-2. Implement `ReadOnlyAutoAllowPolicy`:
+1. Create `internal/permission/policy.go` defining the `Policy` interface and `Decision` enum with `fmt.Stringer`.
+2. Implement `ReadOnlyPolicy`:
    - `read_file` -> `Allow`
-   - `bash` / `write_file` -> `AskUser`
-3. Wire the active policy into the harness configuration.
+   - `write_file` / `bash` -> `AskUser`
+3. Implement `AlwaysAskPolicy` (returns `AskUser` for all tools) for fail-safe default fallback.
+4. Wire `Policy` into `Agent` struct with defensive initialization in `agent.New()`.
+5. Update `main.go` to configure `rootAgent` with `permission.ReadOnlyPolicy{}`.
 
 ## 4. Verification & Exercises
 
@@ -56,7 +58,6 @@ Verify that safe tools run without interrupting the user.
 
 **Expected Interaction & Output:**
 - No confirmation prompt appears.
-- `[policy] Auto-allowing read_file tool.`
 - Model reads the file and displays the lines immediately.
 
 ---
@@ -70,10 +71,8 @@ Verify that writing or running shell commands still triggers the confirmation pr
 ```
 
 **Expected Interaction & Output:**
-- The prompt halts and asks:
+- The prompt halts and presents the styled approval gate in the TUI:
   ```text
-  [permission required] write_file {"path":"ideas.txt","content":"build an agent"}
-  Allow execution? [y/N]:
+  Allow execution of write_file {"content":"build an agent","path":"ideas.txt"}? [y/N]
   ```
-- Denying or approving works as configured in Step 02.
-
+- Approving executes the write; denying aborts safely.

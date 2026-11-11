@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"phi-agent-code/internal/api"
+	"phi-agent-code/internal/permission"
 	"phi-agent-code/internal/tool"
 )
 
@@ -28,7 +29,7 @@ func (m *mockProvider) Send(_ context.Context, _ []api.Message, _ []api.ToolDef)
 	return resp, nil
 }
 
-func (m *mockProvider) Model() string   { return "mock" }
+func (m *mockProvider) Model() string     { return "mock" }
 func (m *mockProvider) SetModel(_ string) {}
 
 // mockEchoTool simulates a simple executable tool for unit tests.
@@ -79,7 +80,7 @@ func (mockPerpetualToolProvider) Send(_ context.Context, _ []api.Message, _ []ap
 	}, nil
 }
 
-func (mockPerpetualToolProvider) Model() string   { return "mock" }
+func (mockPerpetualToolProvider) Model() string     { return "mock" }
 func (mockPerpetualToolProvider) SetModel(_ string) {}
 
 // mockFailingProvider simulates network or API provider failures.
@@ -91,7 +92,7 @@ func (m mockFailingProvider) Send(_ context.Context, _ []api.Message, _ []api.To
 	return api.Response{}, m.err
 }
 
-func (mockFailingProvider) Model() string   { return "failing-mock" }
+func (mockFailingProvider) Model() string     { return "failing-mock" }
 func (mockFailingProvider) SetModel(_ string) {}
 
 // mockTrackingCompactor verifies that Agent.Run invokes CompactionStrategy and updates history.
@@ -569,5 +570,157 @@ func TestAgentLoop_ProviderError(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "provider error: connection refused: 503") {
 		t.Errorf("expected wrapped provider error, got %q", err.Error())
+	}
+}
+
+// mockReadFileTool simulates read_file for policy tests.
+type mockReadFileTool struct{}
+
+func (mockReadFileTool) Definition() api.ToolDef {
+	return api.ToolDef{Name: "read_file", Description: "Reads a file"}
+}
+
+func (mockReadFileTool) Execute(_ context.Context, _ string) (string, bool) {
+	return "sample file content", false
+}
+
+// mockDenyAllPolicy rejects all tool executions unconditionally.
+type mockDenyAllPolicy struct{}
+
+func (mockDenyAllPolicy) Authorize(_, _ string) permission.Decision {
+	return permission.Deny
+}
+
+// TestAgentLoop_ReadOnlyPolicyAutoAllow verifies that ReadOnlyPolicy permits read_file without calling Confirm.
+func TestAgentLoop_ReadOnlyPolicyAutoAllow(t *testing.T) {
+	mock := &mockProvider{
+		responses: []api.Response{
+			{
+				Content: []api.Block{
+					{
+						Type:      api.BlockToolUse,
+						ToolUseID: "call_read_1",
+						ToolName:  "read_file",
+						ToolInput: `{"path":"main.go"}`,
+					},
+				},
+				StopReason: "tool_use",
+			},
+			{
+				Content: []api.Block{
+					{
+						Type: api.BlockText,
+						Text: "File read complete",
+					},
+				},
+				StopReason: "end_turn",
+			},
+		},
+	}
+
+	registry := tool.NewToolRegistry()
+	registry.Register(mockReadFileTool{})
+
+	confirmCalled := false
+	a := New(Agent{
+		Name:     "read-only-agent",
+		Provider: mock,
+		Tools:    registry,
+		Policy:   permission.ReadOnlyPolicy{},
+		Confirm: func(_ string) bool {
+			confirmCalled = true
+			return true
+		},
+		Verbose: false,
+	})
+
+	output, err := a.Run(context.Background(), "Read main.go")
+	if err != nil {
+		t.Fatalf("unexpected error during auto-allow run: %v", err)
+	}
+
+	if output != "File read complete" {
+		t.Errorf("expected 'File read complete', got %q", output)
+	}
+
+	if confirmCalled {
+		t.Errorf("expected Confirm to NOT be called for auto-allowed read_file")
+	}
+
+	messages := a.Messages()
+	if len(messages) < 3 {
+		t.Fatalf("expected at least 3 messages, got %d", len(messages))
+	}
+	if messages[2].Content[0].IsError {
+		t.Errorf("expected tool result IsError to be false")
+	}
+}
+
+// TestAgentLoop_PolicyDeny verifies that policy.Deny rejects execution immediately without prompting user.
+func TestAgentLoop_PolicyDeny(t *testing.T) {
+	mock := &mockProvider{
+		responses: []api.Response{
+			{
+				Content: []api.Block{
+					{
+						Type:      api.BlockToolUse,
+						ToolUseID: "call_denied_by_policy",
+						ToolName:  "read_file",
+						ToolInput: `{"path":"secret.txt"}`,
+					},
+				},
+				StopReason: "tool_use",
+			},
+			{
+				Content: []api.Block{
+					{
+						Type: api.BlockText,
+						Text: "Understood, policy rejected this.",
+					},
+				},
+				StopReason: "end_turn",
+			},
+		},
+	}
+
+	registry := tool.NewToolRegistry()
+	registry.Register(mockReadFileTool{})
+
+	confirmCalled := false
+	a := New(Agent{
+		Name:     "deny-agent",
+		Provider: mock,
+		Tools:    registry,
+		Policy:   mockDenyAllPolicy{},
+		Confirm: func(_ string) bool {
+			confirmCalled = true
+			return true
+		},
+		Verbose: false,
+	})
+
+	output, err := a.Run(context.Background(), "Read forbidden secret")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if output != "Understood, policy rejected this." {
+		t.Errorf("expected fallback response, got %q", output)
+	}
+
+	if confirmCalled {
+		t.Errorf("expected Confirm hook to NOT be called when policy returns Deny")
+	}
+
+	messages := a.Messages()
+	if len(messages) < 3 {
+		t.Fatalf("expected at least 3 messages, got %d", len(messages))
+	}
+	resultBlock := messages[2].Content[0]
+	if !resultBlock.IsError {
+		t.Errorf("expected tool result IsError to be true")
+	}
+	if !strings.Contains(resultBlock.ToolResult, "Permission denied by policy") {
+		t.Errorf("expected 'Permission denied by policy', got %q", resultBlock.ToolResult)
 	}
 }

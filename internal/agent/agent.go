@@ -10,6 +10,7 @@ import (
 
 	"phi-agent-code/internal/api"
 	"phi-agent-code/internal/compact"
+	"phi-agent-code/internal/permission"
 	"phi-agent-code/internal/provider"
 	"phi-agent-code/internal/tool"
 )
@@ -27,8 +28,8 @@ type Agent struct {
 	Verbose   bool                       // When true, displays spinner and streams assistant text to terminal
 	LogPrefix string                     // CLI log prefix displayed before tool execution notices
 	Confirm   func(prompt string) bool   // Optional permission gate hook for sensitive operations
-
-	messages []api.Message // Private conversational memory for this agent instance
+	Policy    permission.Policy
+	messages  []api.Message // Private conversational memory for this agent instance
 }
 
 // New constructs an Agent instance with defensive defaults applied.
@@ -36,7 +37,9 @@ type Agent struct {
 // will not cause runtime panics or runaway execution loops.
 func New(initialConfig Agent) *Agent {
 	configuredAgent := initialConfig
-
+	if configuredAgent.Policy == nil {
+		configuredAgent.Policy = permission.AlwaysAskPolicy{}
+	}
 	if configuredAgent.MaxTurns <= 0 {
 		configuredAgent.MaxTurns = 15 // Default guard limit against runaway recursion
 	}
@@ -133,12 +136,19 @@ func (agentInstance *Agent) Run(ctx context.Context, prompt string) (string, err
 
 // executeTool resolves and runs requested tools within the agent's scoped registry.
 func (agentInstance *Agent) executeTool(ctx context.Context, toolName, rawArguments string) (string, bool) {
-	// Check interactive permission gate if configured
-	if agentInstance.Confirm != nil {
-		confirmationPrompt := fmt.Sprintf("Allow execution of %s %s?", toolName, rawArguments)
-		if !agentInstance.Confirm(confirmationPrompt) {
-			return "Permission denied by user", true
+	decision := agentInstance.Policy.Authorize(toolName, rawArguments)
+	switch decision {
+	case permission.Deny:
+		return "Permission denied by policy", true
+	case permission.AskUser:
+		if agentInstance.Confirm != nil {
+			confirmationPrompt := fmt.Sprintf("Allow execution of %s %s?", toolName, rawArguments)
+			if !agentInstance.Confirm(confirmationPrompt) {
+				return "Permission denied by user", true
+			}
 		}
+	case permission.Allow:
+		// Auto-approved
 	}
 
 	// Provide progress logging for subagents
