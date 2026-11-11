@@ -71,7 +71,7 @@ func main() {
 		Verbose:   true,
 	})
 
-	// Definimos el runner que la TUI llamará cuando el usuario pulse Enter
+	// Define the execution runner invoked by the TUI when the user submits a prompt
 	runner := func(ctx context.Context, input string) error {
 		if handleCommand(input) {
 			return nil
@@ -80,17 +80,14 @@ func main() {
 		return err
 	}
 
-	// Inicializamos la TUI (pipe y escáner quedan encapsulados dentro)
-	app, err := ui.NewProgram(runner)
+	// Initialize the full TUI with integrated banner and startup light sweep animation
+	app, err := ui.NewProgram(runner, prov.Model())
 	if err != nil {
 		fmt.Printf("failed to initialize TUI: %v\n", err)
 		return
 	}
 
-	// Display CLI startup banner with active model and current working directory
-	ui.PrintBanner(prov.Model())
-
-	// Conectamos la confirmación interactiva y arrancamos
+	// Connect interactive tool approval hook and start the Bubble Tea event loop
 	rootAgent.Confirm = app.Confirm
 	if err := app.Run(); err != nil {
 		fmt.Printf("TUI error: %v\n", err)

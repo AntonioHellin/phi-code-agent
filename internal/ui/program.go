@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -42,6 +43,15 @@ type agentDoneMsg struct {
 	err error
 }
 
+// introTickMsg advances the optical lighting sweep animation across the logo at startup.
+type introTickMsg int
+
+func introTickCmd(step int) tea.Cmd {
+	return tea.Tick(35*time.Millisecond, func(time.Time) tea.Msg {
+		return introTickMsg(step)
+	})
+}
+
 // Program manages the Bubble Tea execution lifecycle, stdout pipe redirection, and interactive confirmations.
 type Program struct {
 	teaProgram     *tea.Program
@@ -64,6 +74,10 @@ type harness struct {
 
 	output       *strings.Builder // Pointer to prevent value-copy panics during Bubble Tea model updates
 	followBottom bool             // Auto-scrolls viewport to bottom unless user manually scrolled up
+
+	modelName string
+	introStep int // Current sweep column index (0..55); -1 when animation is complete
+	bannerLen int // Byte length of the rendered banner at the start of the output buffer
 }
 
 // View renders the terminal frame by vertically joining the scrollback viewport and the dynamic input area.
@@ -98,7 +112,7 @@ func (h harness) inputArea() string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")). // Classic Bubble Tea purple border
+		BorderForeground(lipgloss.Color("#30E1C3")). // Mineral turquoise border matching brand
 		Padding(0, 1).
 		Render(h.input.View())
 
@@ -106,12 +120,16 @@ func (h harness) inputArea() string {
 	return lipgloss.JoinVertical(lipgloss.Left, statusLine, box, hint)
 }
 
-// Init starts the initial background timers for cursor blinking and spinner animation.
+// Init starts the initial background timers for cursor blinking, spinner animation, and intro light sweep.
 func (h harness) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textinput.Blink,
 		h.spinner.Tick,
-	)
+	}
+	if h.introStep >= 0 {
+		cmds = append(cmds, introTickCmd(0))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update processes incoming terminal messages, keystrokes, and asynchronous worker events.
@@ -160,7 +178,54 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h, cmd
 		}
 
+	case introTickMsg:
+		if h.introStep < 0 {
+			return h, nil
+		}
+		h.introStep = int(msg)
+		if h.introStep <= 6 {
+			banner := RenderBanner(h.modelName, h.introStep)
+			history := ""
+			if h.output.Len() > h.bannerLen {
+				history = h.output.String()[h.bannerLen:]
+			}
+			h.output.Reset()
+			h.output.WriteString(banner)
+			h.bannerLen = len(banner)
+			h.output.WriteString(history)
+			h.viewport.SetContent(h.output.String())
+			return h, introTickCmd(h.introStep + 1)
+		}
+
+		// Animation complete: render permanent static banner
+		h.introStep = -1
+		banner := RenderBanner(h.modelName, -1)
+		history := ""
+		if h.output.Len() > h.bannerLen {
+			history = h.output.String()[h.bannerLen:]
+		}
+		h.output.Reset()
+		h.output.WriteString(banner)
+		h.bannerLen = len(banner)
+		h.output.WriteString(history)
+		h.viewport.SetContent(h.output.String())
+		return h, nil
+
 	case tea.KeyMsg:
+		// If user types or navigates before intro wave finishes, immediately finalize banner
+		if h.introStep >= 0 {
+			h.introStep = -1
+			banner := RenderBanner(h.modelName, -1)
+			history := ""
+			if h.output.Len() > h.bannerLen {
+				history = h.output.String()[h.bannerLen:]
+			}
+			h.output.Reset()
+			h.output.WriteString(banner)
+			h.bannerLen = len(banner)
+			h.output.WriteString(history)
+			h.viewport.SetContent(h.output.String())
+		}
 		switch h.state {
 		case stateAwaitingApproval:
 			switch msg.String() {
@@ -242,20 +307,30 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // NewProgram initializes the full TUI with stdout pipe redirection and encapsulated event handling.
-func NewProgram(runner AgentRunner) (*Program, error) {
+func NewProgram(runner AgentRunner, model string) (*Program, error) {
 	ti := textinput.New()
 	ti.Placeholder = "Type your prompt here..."
+	ti.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#30E1C3"))
+	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E0FAF5"))
+	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#30E1C3"))
 	ti.Focus()
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
+	initialBanner := RenderBanner(model, 0)
+	out := &strings.Builder{}
+	out.WriteString(initialBanner)
+
 	m := harness{
 		runner:       runner,
 		input:        ti,
 		spinner:      sp,
-		output:       &strings.Builder{},
+		output:       out,
 		followBottom: true,
+		modelName:    model,
+		introStep:    0,
+		bannerLen:    len(initialBanner),
 	}
 
 	// Intercept standard output via pipe so all agent and tool logs flow into viewport

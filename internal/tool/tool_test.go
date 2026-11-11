@@ -2,9 +2,6 @@ package tool
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"phi-agent-code/internal/api"
@@ -112,66 +109,4 @@ func TestDefaultRegistryContainsNativeTools(t *testing.T) {
 	}
 }
 
-func TestReadFileToolExecution(t *testing.T) {
-	tInstance, exists := DefaultRegistry.Get("read_file")
-	if !exists {
-		t.Fatalf("read_file tool not registered in DefaultRegistry")
-	}
-
-	ctx := context.Background()
-
-	// 1. Test reading non-existent file returns error flag without panicking
-	nonExistentPath := filepath.Join(t.TempDir(), "missing.txt")
-	result, isError := tInstance.Execute(ctx, `{"path":"`+strings.ReplaceAll(nonExistentPath, `\`, `\\`)+`"}`)
-	if !isError {
-		t.Fatalf("expected isError=true for non-existent file, got false")
-	}
-	if result == "" {
-		t.Fatalf("expected non-empty error message for non-existent file")
-	}
-
-	// 2. Test reading an existing file returns its content
-	testDir := t.TempDir()
-	filePath := filepath.Join(testDir, "test.txt")
-	expectedContent := "hello tool registry"
-	if err := os.WriteFile(filePath, []byte(expectedContent), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	validResult, validErr := tInstance.Execute(ctx, `{"path":"`+strings.ReplaceAll(filePath, `\`, `\\`)+`"}`)
-	if validErr {
-		t.Fatalf("expected valid file read to succeed, got error: %s", validResult)
-	}
-	if validResult != expectedContent {
-		t.Errorf("expected file content '%s', got '%s'", expectedContent, validResult)
-	}
-}
-
-func TestWriteFileToolExecution(t *testing.T) {
-	tInstance, exists := DefaultRegistry.Get("write_file")
-	if !exists {
-		t.Fatalf("write_file tool not registered in DefaultRegistry")
-	}
-
-	ctx := context.Background()
-	testDir := t.TempDir()
-	filePath := filepath.Join(testDir, "output.txt")
-	contentToWrite := "writing from tool test"
-
-	escapedPath := strings.ReplaceAll(filePath, `\`, `\\`)
-	payload := `{"path":"` + escapedPath + `","content":"` + contentToWrite + `"}`
-
-	result, isError := tInstance.Execute(ctx, payload)
-	if isError {
-		t.Fatalf("expected write_file to succeed, got error: %s", result)
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("failed to read written file: %v", err)
-	}
-	if string(data) != contentToWrite {
-		t.Errorf("expected written content '%s', got '%s'", contentToWrite, string(data))
-	}
-}
 

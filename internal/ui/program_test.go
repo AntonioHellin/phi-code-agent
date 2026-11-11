@@ -25,6 +25,8 @@ func newTestHarness() harness {
 		state:        stateIdle,
 		output:       &strings.Builder{},
 		followBottom: true,
+		modelName:    "claude-haiku-5-5",
+		introStep:    -1, // Unit tests default to completed intro animation
 	}
 }
 
@@ -290,3 +292,57 @@ func TestHarnessSpinnerTick(t *testing.T) {
 		t.Errorf("expected state to remain running")
 	}
 }
+
+// TestHarnessIntroLightSweep verifies the intro light wave animation across the logo and keypress finalization.
+func TestHarnessIntroLightSweep(t *testing.T) {
+	ti := textinput.New()
+	sp := spinner.New()
+	initialBanner := RenderBanner("test-model", 0)
+	out := &strings.Builder{}
+	out.WriteString(initialBanner)
+
+	h := harness{
+		runner:       func(ctx context.Context, prompt string) error { return nil },
+		viewport:     viewport.New(80, 20),
+		input:        ti,
+		spinner:      sp,
+		output:       out,
+		followBottom: true,
+		modelName:    "test-model",
+		introStep:    0,
+		bannerLen:    len(initialBanner),
+	}
+
+	// 1. Init should schedule the first intro tick
+	cmd := h.Init()
+	if cmd == nil {
+		t.Fatal("expected Init() to return batch including intro tick cmd")
+	}
+
+	// 2. An intermediate tick advances sweep column and returns next command
+	updated, nextCmd := h.Update(introTickMsg(3))
+	m := updated.(harness)
+	if m.introStep != 3 {
+		t.Errorf("expected introStep=3, got %d", m.introStep)
+	}
+	if nextCmd == nil {
+		t.Error("expected next tick command during active sweep")
+	}
+
+	// 3. User keypress before completion immediately finalizes the banner
+	updatedKey, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	mKey := updatedKey.(harness)
+	if mKey.introStep != -1 {
+		t.Errorf("expected keypress to complete intro animation (introStep=-1), got %d", mKey.introStep)
+	}
+}
+
+// TestRenderBannerVisual verifies banner rendering and prints it to test logs.
+func TestRenderBannerVisual(t *testing.T) {
+	banner := RenderBanner("test-model", -1)
+	if !strings.Contains(banner, "test-model") {
+		t.Errorf("expected banner to contain model name")
+	}
+	t.Logf("\n%s", banner)
+}
+
