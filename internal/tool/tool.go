@@ -43,6 +43,18 @@ func (r *Registry) Register(t Tool) {
 	r.tools[t.Definition().Name] = t
 }
 
+// RegisterWithRetry wraps the tool in a RetryDecorator with default backoff
+// before registering it by its definition name. Nil tools are ignored safely.
+func (r *Registry) RegisterWithRetry(t Tool, maxRetries int) {
+	if t == nil {
+		return
+	}
+	r.Register(&RetryDecorator{
+		Tool:       t,
+		MaxRetries: maxRetries,
+	})
+}
+
 // Get retrieves a tool by its registered name.
 // Returns the tool and true if found, or nil and false if not registered.
 func (r *Registry) Get(name string) (Tool, bool) {
@@ -59,4 +71,3 @@ func (r *Registry) Definitions() []api.ToolDef {
 	}
 	return definitions
 }
-

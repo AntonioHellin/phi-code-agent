@@ -16,7 +16,7 @@ import (
 type BashTool struct{}
 
 func init() {
-	DefaultRegistry.Register(&BashTool{})
+	DefaultRegistry.RegisterWithRetry(&BashTool{}, 2)
 }
 
 // Definition returns the JSON Schema metadata describing the bash tool to the LLM provider.
@@ -65,4 +65,3 @@ func (BashTool) Execute(ctx context.Context, rawInput string) (string, bool) {
 	}
 	return string(out), false
 }
-

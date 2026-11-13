@@ -29,6 +29,8 @@ func (m *mockTool) Execute(_ context.Context, _ string) (string, bool) {
 	return m.output, m.isError
 }
 
+// TestRegistryRegisterAndGet verifies registering a tool by name, retrieving its metadata,
+// and returning false when looking up an unregistered tool.
 func TestRegistryRegisterAndGet(t *testing.T) {
 	registry := NewToolRegistry()
 
@@ -62,6 +64,7 @@ func TestRegistryRegisterAndGet(t *testing.T) {
 	}
 }
 
+// TestRegistryDefinitions verifies that Definitions returns schemas for all registered tools.
 func TestRegistryDefinitions(t *testing.T) {
 	registry := NewToolRegistry()
 
@@ -86,6 +89,8 @@ func TestRegistryDefinitions(t *testing.T) {
 	}
 }
 
+// TestDefaultRegistryContainsNativeTools verifies that bash, read_file, and write_file
+// self-register into DefaultRegistry during package initialization.
 func TestDefaultRegistryContainsNativeTools(t *testing.T) {
 	expectedTools := []string{"bash", "read_file", "write_file"}
 
@@ -109,4 +114,39 @@ func TestDefaultRegistryContainsNativeTools(t *testing.T) {
 	}
 }
 
+// TestRegistryRegisterWithRetry verifies that RegisterWithRetry ignores nil tools
+// and wraps valid tools in a RetryDecorator with the configured retry limit.
+func TestRegistryRegisterWithRetry(t *testing.T) {
+	registry := NewToolRegistry()
 
+	// Defensive guard: registering a nil tool must not panic or populate the registry.
+	registry.RegisterWithRetry(nil, 2)
+	if len(registry.Definitions()) != 0 {
+		t.Fatalf("expected empty registry after registering nil tool, got %d entries", len(registry.Definitions()))
+	}
+
+	mock := &mockTool{
+		name:        "flaky_tool",
+		description: "Tool wrapped with retry support",
+	}
+	registry.RegisterWithRetry(mock, 2)
+
+	retrieved, exists := registry.Get("flaky_tool")
+	if !exists {
+		t.Fatalf("expected 'flaky_tool' to be registered")
+	}
+
+	decorator, ok := retrieved.(*RetryDecorator)
+	if !ok {
+		t.Fatalf("expected registered tool to be wrapped in *RetryDecorator, got %T", retrieved)
+	}
+	if decorator.Tool != mock {
+		t.Errorf("expected decorator to wrap the original mock tool")
+	}
+	if decorator.MaxRetries != 2 {
+		t.Errorf("expected MaxRetries=2, got %d", decorator.MaxRetries)
+	}
+	if retrieved.Definition().Name != "flaky_tool" {
+		t.Errorf("expected preserved definition name 'flaky_tool', got %q", retrieved.Definition().Name)
+	}
+}

@@ -12,7 +12,7 @@ import (
 type WriteFileTool struct{}
 
 func init() {
-	DefaultRegistry.Register(&WriteFileTool{})
+	DefaultRegistry.RegisterWithRetry(&WriteFileTool{}, 2)
 }
 
 // Definition returns the JSON Schema declaration for the write_file tool.
@@ -52,4 +52,3 @@ func (WriteFileTool) Execute(_ context.Context, rawInput string) (string, bool) 
 
 	return "wrote " + in.Path, false
 }
-

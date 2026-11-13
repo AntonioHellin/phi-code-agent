@@ -12,7 +12,7 @@ import (
 type ReadFileTool struct{}
 
 func init() {
-	DefaultRegistry.Register(&ReadFileTool{})
+	DefaultRegistry.RegisterWithRetry(&ReadFileTool{}, 2)
 }
 
 // Definition returns the JSON Schema declaration for the read_file tool.
@@ -47,4 +47,3 @@ func (ReadFileTool) Execute(_ context.Context, rawInput string) (string, bool) {
 
 	return string(data), false
 }
-
