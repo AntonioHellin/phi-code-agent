@@ -73,7 +73,7 @@ All milestones are organized into two clear phases: **Phase 1: The Core Arc** (e
 |:---:|---|---|:---:|:---:|
 | **14** | **Permission Policies** | Pluggable policies (AlwaysAsk, AllowList, AutoAccept, path-scoped restrictions) in internal/permission. | [Read Guide](docs/steps/14-permission-policies.md) | step/14-permission-policies |
 | **15** | **Tool Error Retry** | Automatic retry handling for transient errors before returning to the model in internal/tool. | [Read Guide](docs/steps/15-tool-retry.md) | step/15-tool-retry |
-| **16** | **Alternative Providers & Mocks** | Pure `Provider` contract; Gemini SDK, Anthropic SDK, Ollama stdlib HTTP, and exported `MockProvider`. | [Read Guide](docs/steps/16-providers-and-mocks.md) | step/16-providers-and-mocks |
+| **16.1** | **Alternative Providers & Mocks** | Pure `Provider` contract; Gemini SDK, Anthropic SDK, Ollama stdlib HTTP, and exported `MockProvider`. | [Read Guide](docs/steps/16_1-providers-and-mocks.md) | step/16-providers-and-mocks |
 | **16.2** | **Dynamic Model Discovery** *(Extra)* | Optional `ModelLister` capability (`ISP`) and on-demand `/models` catalog lookup with static fallback. | [Read Guide](docs/steps/16_2-dynamic-model-discovery.md) | feat/dynamic-model-discovery |
 | **17** | **Streaming Responses** | Real-time token streaming from the model to the terminal output. | [Read Guide](docs/steps/17-streaming-responses.md) | step/17-streaming-responses |
 | **18** | **Token Budgeting & Cost Tracking** | Budget-based message pruning, live token counting, and /tokens command. | [Read Guide](docs/steps/18-token-budget-and-cost.md) | step/18-token-budget-and-cost |

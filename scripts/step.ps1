@@ -76,7 +76,7 @@ $Steps = @{
     # --- Phase 2: Extensions, How-Tos and Extras (Pasos 14 al 27) ---
     14 = @{ Branch = "step/14-permission-policies"; Guide = "docs/steps/14-permission-policies.md"; Title = "Permission Policies" }
     15 = @{ Branch = "step/15-tool-retry"; Guide = "docs/steps/15-tool-retry.md"; Title = "Tool Error Retry" }
-    16 = @{ Branch = "step/16-providers-and-mocks"; Guide = "docs/steps/16-providers-and-mocks.md"; Title = "Alternative Providers and Mocks" }
+    16 = @{ Branch = "step/16-providers-and-mocks"; Guide = "docs/steps/16_1-providers-and-mocks.md"; Title = "Alternative Providers and Mocks" }
     17 = @{ Branch = "step/17-streaming-responses"; Guide = "docs/steps/17-streaming-responses.md"; Title = "Streaming Responses" }
     18 = @{ Branch = "step/18-token-budget-and-cost"; Guide = "docs/steps/18-token-budget-and-cost.md"; Title = "Token Budgeting and Cost Tracking" }
     19 = @{ Branch = "step/19-prompt-caching"; Guide = "docs/steps/19-prompt-caching.md"; Title = "Prompt Caching" }
