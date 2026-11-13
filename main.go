@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"google.golang.org/genai"
 
 	"phi-agent-code/internal/agent"
 	"phi-agent-code/internal/compact"
@@ -25,15 +29,80 @@ var (
 	compactor compact.CompactionStrategy = compact.NoCompaction{}
 )
 
+// buildProvider acts as the Composition Root factory, selecting and wiring a concrete
+// provider.Provider backend from CLI flags and environment configuration.
+func buildProvider(name, modelOverride, system string) (provider.Provider, error) {
+	model := strings.TrimSpace(modelOverride)
+
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "anthropic":
+		if strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY is required when using --provider anthropic")
+		}
+		if model == "" {
+			model = strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL"))
+		}
+		if model == "" {
+			model = string(anthropic.ModelClaudeHaiku5_5)
+		}
+		anthropicClient := anthropic.NewClient()
+		return provider.NewAnthropicProvider(&anthropicClient, model, 8192, system), nil
+
+	case "ollama":
+		if model == "" {
+			model = strings.TrimSpace(os.Getenv("OLLAMA_MODEL"))
+		}
+		if model == "" {
+			model = "llama3.2"
+		}
+		return provider.NewOllamaProvider(os.Getenv("OLLAMA_BASE_URL"), model, system), nil
+
+	case "gemini":
+		apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(os.Getenv("GOOGLE_API_KEY"))
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY is required when using --provider gemini")
+		}
+		if model == "" {
+			model = strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
+		}
+		if model == "" {
+			model = "gemini-4-hydrogen"
+		}
+		client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+			APIKey:  apiKey,
+			Backend: genai.BackendGeminiAPI,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create gemini client: %w", err)
+		}
+		return provider.NewGeminiProvider(client, model, 0, system), nil
+
+	case "mock":
+		mock := &provider.MockProvider{}
+		if model != "" {
+			mock.SetModel(model)
+		}
+		return mock, nil
+
+	default:
+		return nil, fmt.Errorf("unknown provider %q (expected: anthropic, ollama, gemini, mock)", name)
+	}
+}
+
 func main() {
-	// Initialize concrete Anthropic LLM provider adapter
-	anthropicClient := anthropic.NewClient()
-	prov = provider.NewAnthropicProvider(
-		&anthropicClient,
-		string(anthropic.ModelClaudeHaiku5_5),
-		8192,
-		systemPrompt,
-	)
+	providerFlag := flag.String("provider", "gemini", "LLM provider backend: gemini (default), anthropic, ollama, mock")
+	modelFlag := flag.String("model", "", "Override active model ID for the selected provider")
+	flag.Parse()
+
+	var err error
+	prov, err = buildProvider(*providerFlag, *modelFlag, systemPrompt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "provider initialization error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// -------------------------------------------------------------------------
 	// Compaction Strategy Configuration (Composition Root)
