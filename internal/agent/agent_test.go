@@ -8,29 +8,9 @@ import (
 
 	"phi-agent-code/internal/api"
 	"phi-agent-code/internal/permission"
+	"phi-agent-code/internal/provider"
 	"phi-agent-code/internal/tool"
 )
-
-// mockProvider simulates LLM responses for deterministic, isolated unit testing.
-type mockProvider struct {
-	responses []api.Response
-	callIndex int
-}
-
-func (m *mockProvider) Send(_ context.Context, _ []api.Message, _ []api.ToolDef) (api.Response, error) {
-	if m.callIndex >= len(m.responses) {
-		return api.Response{
-			Content:    []api.Block{{Type: api.BlockText, Text: "default response"}},
-			StopReason: "end_turn",
-		}, nil
-	}
-	resp := m.responses[m.callIndex]
-	m.callIndex++
-	return resp, nil
-}
-
-func (m *mockProvider) Model() string     { return "mock" }
-func (m *mockProvider) SetModel(_ string) {}
 
 // mockEchoTool simulates a simple executable tool for unit tests.
 type mockEchoTool struct{}
@@ -110,8 +90,8 @@ func (m *mockTrackingCompactor) Compact(_ context.Context, messages []api.Messag
 
 // TestAgentLoop_SimpleResponse verifies a direct text response completed in a single reasoning turn.
 func TestAgentLoop_SimpleResponse(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			{
 				Content:    []api.Block{{Type: api.BlockText, Text: "Hello from agent"}},
 				StopReason: "end_turn",
@@ -141,8 +121,8 @@ func TestAgentLoop_SimpleResponse(t *testing.T) {
 
 // TestAgentLoop_ToolExecution verifies tool execution and synthesis across two reasoning turns.
 func TestAgentLoop_ToolExecution(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			// Turn 1: Model requests tool execution
 			{
 				Content: []api.Block{
@@ -195,8 +175,8 @@ func TestAgentLoop_ToolExecution(t *testing.T) {
 
 // TestAgentLoop_SelfCorrection verifies that tool execution errors trigger an autonomous self-correction turn.
 func TestAgentLoop_SelfCorrection(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			// Turn 1: Model requests read of non-existent file
 			{
 				Content: []api.Block{
@@ -278,8 +258,8 @@ func TestAgentLoop_SelfCorrection(t *testing.T) {
 
 // TestPermissionGate_Rejection verifies graceful agent recovery when user denies tool execution permission.
 func TestPermissionGate_Rejection(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			{
 				Content: []api.Block{
 					{
@@ -341,8 +321,8 @@ func TestPermissionGate_Rejection(t *testing.T) {
 
 // TestAgentLoop_CompactionTrigger verifies that context compaction triggers and trims history when thresholds are met.
 func TestAgentLoop_CompactionTrigger(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			{
 				Content:    []api.Block{{Type: api.BlockText, Text: "Answer 1"}},
 				StopReason: "end_turn",
@@ -416,8 +396,8 @@ func TestAgentMaxTurnsLimit(t *testing.T) {
 
 // TestAgentLoop_ParallelToolExecution verifies that multiple tool calls in a single assistant turn are executed in sequence and bundled into one tool result message.
 func TestAgentLoop_ParallelToolExecution(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			// Turn 1: Model requests two tool calls in parallel
 			{
 				Content: []api.Block{
@@ -495,8 +475,8 @@ func TestAgentLoop_ParallelToolExecution(t *testing.T) {
 
 // TestAgentLoop_UnknownTool verifies that requesting an unregistered tool returns an error result instead of panicking.
 func TestAgentLoop_UnknownTool(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			// Turn 1: Model requests unknown tool
 			{
 				Content: []api.Block{
@@ -593,8 +573,8 @@ func (mockDenyAllPolicy) Authorize(_, _ string) permission.Decision {
 
 // TestAgentLoop_ReadOnlyPolicyAutoAllow verifies that ReadOnlyPolicy permits read_file without calling Confirm.
 func TestAgentLoop_ReadOnlyPolicyAutoAllow(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			{
 				Content: []api.Block{
 					{
@@ -658,8 +638,8 @@ func TestAgentLoop_ReadOnlyPolicyAutoAllow(t *testing.T) {
 
 // TestAgentLoop_PolicyDeny verifies that policy.Deny rejects execution immediately without prompting user.
 func TestAgentLoop_PolicyDeny(t *testing.T) {
-	mock := &mockProvider{
-		responses: []api.Response{
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
 			{
 				Content: []api.Block{
 					{

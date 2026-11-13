@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"phi-agent-code/internal/api"
+	"phi-agent-code/internal/provider"
 )
 
 func TestSafeSplitPoint(t *testing.T) {
@@ -213,25 +214,16 @@ func TestWithLogging(t *testing.T) {
 	}
 }
 
-// mockSummaryProvider implements provider.Provider for unit testing Summarize without real API calls.
-type mockSummaryProvider struct {
-	summaryText string
-	called      bool
-}
-
-func (m *mockSummaryProvider) Send(_ context.Context, _ []api.Message, _ []api.ToolDef) (api.Response, error) {
-	m.called = true
-	return api.Response{
-		Content:    []api.Block{{Type: api.BlockText, Text: m.summaryText}},
-		StopReason: "end_turn",
-	}, nil
-}
-
-func (m *mockSummaryProvider) Model() string   { return "mock-model" }
-func (m *mockSummaryProvider) SetModel(_ string) {}
-
 func TestSummarize(t *testing.T) {
-	mock := &mockSummaryProvider{summaryText: "User asked for file operations and tests were executed."}
+	const summaryText = "User asked for file operations and tests were executed."
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
+			{
+				Content:    []api.Block{{Type: api.BlockText, Text: summaryText}},
+				StopReason: "end_turn",
+			},
+		},
+	}
 	strategy := &Summarize{
 		Provider:   mock,
 		Threshold:  6,
@@ -248,7 +240,6 @@ func TestSummarize(t *testing.T) {
 	}
 
 	t.Run("below threshold does not compact", func(t *testing.T) {
-		mock.called = false
 		shortMsgs := msgs[:4]
 		res, err := strategy.Compact(context.Background(), shortMsgs)
 		if err != nil {
@@ -257,19 +248,18 @@ func TestSummarize(t *testing.T) {
 		if len(res) != len(shortMsgs) {
 			t.Fatalf("expected %d messages, got %d", len(shortMsgs), len(res))
 		}
-		if mock.called {
+		if len(mock.History) != 0 {
 			t.Fatalf("provider should not have been called when below threshold")
 		}
 	})
 
 	t.Run("at or above threshold compacts with summary", func(t *testing.T) {
-		mock.called = false
 		res, err := strategy.Compact(context.Background(), msgs)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !mock.called {
-			t.Fatalf("expected provider to be called for summarization")
+		if len(mock.History) != 1 {
+			t.Fatalf("expected provider to be called once for summarization, got %d calls", len(mock.History))
 		}
 
 		// Desired cut = 6 - 2 = 4 (index 4 is Turn 3, clean user message)
@@ -290,7 +280,7 @@ func TestSummarize(t *testing.T) {
 		if !strings.Contains(firstBlockText, "[Summary of previous conversation]") {
 			t.Fatalf("expected summary header in block, got: %s", firstBlockText)
 		}
-		if !strings.Contains(firstBlockText, mock.summaryText) {
+		if !strings.Contains(firstBlockText, summaryText) {
 			t.Fatalf("expected summary text in block, got: %s", firstBlockText)
 		}
 

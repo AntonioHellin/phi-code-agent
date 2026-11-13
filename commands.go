@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/anthropics/anthropic-sdk-go"
+
+	"phi-agent-code/internal/provider"
 	"phi-agent-code/internal/tool"
 )
 
@@ -73,22 +76,63 @@ func cmdHelp(_ string) {
 	}
 }
 
-// knownModels lists model suggestions shown when /model is called with no arguments.
-var knownModels = []string{
-	"claude-opus-4-7",
-	"claude-opus-4-6",
-	"claude-sonnet-4-6",
-	"claude-haiku-4-5",
-	"claude-haiku-5-5",
+// knownModels maps each backend key to current recommended model suggestions shown by /model.
+var knownModels = map[string][]string{
+	"anthropic": {
+		string(anthropic.ModelClaudeOpus5_5),
+		string(anthropic.ModelClaudeSonnet5_5),
+		string(anthropic.ModelClaudeHaiku5_5),
+	},
+	"gemini": {
+		"gemini-4-hydrogen",
+		"gemini-4-carbon",
+		"gemini-4-argon",
+		"gemini-3.8-flash",
+	},
+	"ollama": {
+		"qwen3-coder",
+		"llama3.3",
+		"llama3.2",
+		"deepseek-r1",
+	},
 }
 
-// cmdModel displays the active model or dynamically updates it.
+// providerKey identifies the active concrete adapter so /model suggests only compatible models.
+func providerKey(p provider.Provider) string {
+	switch p.(type) {
+	case *provider.AnthropicProvider:
+		return "anthropic"
+	case *provider.GeminiProvider:
+		return "gemini"
+	case *provider.OllamaProvider:
+		return "ollama"
+	case *provider.MockProvider:
+		return "mock"
+	default:
+		return ""
+	}
+}
+
+// cmdModel displays the active model plus backend-relevant suggestions, or dynamically updates it.
 func cmdModel(args string) {
 	if args == "" {
 		fmt.Printf("current: %s\n", prov.Model())
 		fmt.Println("suggestions:")
-		for _, model := range knownModels {
-			fmt.Printf("  %s\n", model)
+		if key := providerKey(prov); key != "" {
+			if models := knownModels[key]; len(models) > 0 {
+				for _, model := range models {
+					fmt.Printf("  %s\n", model)
+				}
+				return
+			}
+			fmt.Println("  (any custom identifier for mock)")
+			return
+		}
+		for _, backend := range []string{"gemini", "anthropic", "ollama"} {
+			fmt.Printf("  [%s]\n", backend)
+			for _, model := range knownModels[backend] {
+				fmt.Printf("    %s\n", model)
+			}
 		}
 		return
 	}

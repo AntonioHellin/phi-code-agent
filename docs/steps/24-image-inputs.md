@@ -33,7 +33,7 @@ classDiagram
 
 - **Tagged Struct Invariant**: Rather than introducing an interface hierarchy that requires complex type-assertions throughout the codebase, we maintain the vendor-agnostic **Tagged Struct pattern** established in `internal/api/types.go` by adding `BlockImage`, `ImageMediaType`, and `ImageData`.
 - **Automatic Format Detection**: Detect MIME types (`image/png`, `image/jpeg`, `image/webp`, `image/gif`) from file extensions or magic bytes.
-- **Base64 Encoding**: Normalize local image files into base64 payloads required by LLM wire formats inside `internal/provider/provider.go`.
+- **Base64 Encoding**: Normalize local image files into base64 payloads required by LLM wire formats inside `internal/provider/anthropic.go`.
 - **CLI Syntax Support**: Allow users to attach images using concise syntax, e.g. `@path/to/diagram.png`.
 
 ## 3. Implementation Requirements
@@ -42,7 +42,7 @@ classDiagram
    - Add `BlockImage BlockType = "image"`.
    - Add `ImageMediaType string` and `ImageData []byte` to `api.Block`.
 2. Update user input parser in `internal/ui/` to detect `@<filename>` image attachments and read file bytes.
-3. Update `internal/provider/provider.go` to map `BlockImage` into `anthropic.ImageBlockParam`.
+3. Update `internal/provider/anthropic.go` to map `BlockImage` into `anthropic.ImageBlockParam`.
 
 ## 4. Verification & Exercises
 

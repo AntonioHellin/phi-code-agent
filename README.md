@@ -73,7 +73,7 @@ All milestones are organized into two clear phases: **Phase 1: The Core Arc** (e
 |:---:|---|---|:---:|:---:|
 | **14** | **Permission Policies** | Pluggable policies (AlwaysAsk, AllowList, AutoAccept, path-scoped restrictions) in internal/permission. | [Read Guide](docs/steps/14-permission-policies.md) | step/14-permission-policies |
 | **15** | **Tool Error Retry** | Automatic retry handling for transient errors before returning to the model in internal/tool. | [Read Guide](docs/steps/15-tool-retry.md) | step/15-tool-retry |
-| **16** | **Alternative Providers & Mocks** | Adding OpenAI, Ollama, and a deterministic MockProvider for testing in internal/provider. | [Read Guide](docs/steps/16-providers-and-mocks.md) | step/16-providers-and-mocks |
+| **16** | **Alternative Providers & Mocks** | Pure `Provider` contract; Gemini SDK, Anthropic SDK, Ollama stdlib HTTP, and exported `MockProvider`. | [Read Guide](docs/steps/16-providers-and-mocks.md) | step/16-providers-and-mocks |
 | **17** | **Streaming Responses** | Real-time token streaming from the model to the terminal output. | [Read Guide](docs/steps/17-streaming-responses.md) | step/17-streaming-responses |
 | **18** | **Token Budgeting & Cost Tracking** | Budget-based message pruning, live token counting, and /tokens command. | [Read Guide](docs/steps/18-token-budget-and-cost.md) | step/18-token-budget-and-cost |
 | **19** | **Prompt Caching** | Leveraging provider prompt cache breakpoints to reduce latency and API cost. | [Read Guide](docs/steps/19-prompt-caching.md) | step/19-prompt-caching |
@@ -114,20 +114,55 @@ To enforce architectural discipline and eliminate manual Git friction, this repo
 
 ### Prerequisites
 
-- Go 1.21+
-- Anthropic API Key
+- Go 1.27+
+- **At least one backend** depending on how you run the harness:
+  - **Gemini (default CLI provider)**: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
+  - **Anthropic**: `ANTHROPIC_API_KEY`
+  - **Ollama (€0 local inference)**: local [Ollama](https://ollama.com) daemon (`ollama serve`) + a tool-capable model (`ollama pull llama3.2`)
+  - **Mock**: zero setup or network required
+
+### Supported Providers & Tradeoffs
+
+| Provider | Flag | Implementation Boundary | Why It Exists Here |
+|---|---|---|---|
+| **Gemini** *(default)* | `--provider gemini` | Official SDK (`google.golang.org/genai`) | Frontier/fast models (`gemini-4-hydrogen`), schema validation, ready for upcoming streaming/multimodal milestones. |
+| **Anthropic** | `--provider anthropic` | Official SDK (`anthropic-sdk-go`) | Claude 5.5 models (`opus`, `sonnet`, `haiku`), built-in `429`/`529` retries, native SSE streaming support. |
+| **Ollama** | `--provider ollama` | Stdlib `net/http` + JSON DTOs | Free (`€0`) local open-weight models (`llama3.2`, `qwen3-coder`) with zero extra dependencies and transparent HTTP payloads. |
+| **Mock** | `--provider mock` | In-memory `MockProvider` | Deterministic offline unit tests and zero-cost UI demos without network or API keys. |
 
 ### Running the Current Harness
 
 ```bash
-# Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# On Windows PowerShell:
-# $env:ANTHROPIC_API_KEY="sk-ant-..."
-
-# Run the agent
+# 1. Default: Google Gemini (gemini-4-hydrogen)
+export GEMINI_API_KEY="your-gemini-key"
 go run .
+
+# 2. Anthropic Claude (supports --model override)
+export ANTHROPIC_API_KEY="sk-ant-..."
+go run . --provider anthropic --model claude-sonnet-5-5
+
+# 3. Local zero-cost Ollama (start daemon & pull a tool-capable model first)
+ollama serve &
+ollama pull llama3.2
+go run . --provider ollama
+
+# 4. Completely offline / no API keys
+go run . --provider mock
+```
+
+Inside the interactive TUI, use `/model` to view the active model and compatible suggestions for the running provider, or `/model <name>` to switch models on the fly.
+
+> **Windows + WSL2 tip**: WSL2 runs inside an isolated Linux network/environment namespace. If you store API keys in Windows Environment Variables and run Go inside Ubuntu WSL2, pass them across with `WSLENV="ANTHROPIC_API_KEY:GEMINI_API_KEY"` (and restart your terminal/IDE), and run `ollama serve` directly inside Ubuntu (or set `OLLAMA_BASE_URL` if running Ollama on Windows).
+
+### Testing Guide
+
+```bash
+# Fast offline unit & integration suite (uses MockProvider & httptest.NewServer)
+go test -v ./...
+
+# Opt-in live E2E smoke tests (skips any provider without its env var set)
+GEMINI_API_KEY="your-key" go test -v -tags e2e ./internal/provider -run TestLiveGeminiSmoke
+OLLAMA_MODEL="llama3.2"   go test -v -tags e2e ./internal/provider -run TestLiveOllamaSmoke
 ```
 
 ### Navigating Milestone Snapshots

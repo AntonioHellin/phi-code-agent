@@ -6,6 +6,8 @@ import (
 	"phi-agent-code/internal/api"
 )
 
+// TestToAnthropicMessages verifies domain-to-Anthropic wire translation for user text,
+// assistant tool_use blocks, and tool_result blocks wrapped inside a user turn.
 func TestToAnthropicMessages(t *testing.T) {
 	domainMessages := []api.Message{
 		{
@@ -75,6 +77,8 @@ func TestToAnthropicMessages(t *testing.T) {
 	}
 }
 
+// TestToAnthropicTools verifies conversion of domain ToolDefs into Anthropic tool schemas,
+// preserving tool names, descriptions, and required input fields.
 func TestToAnthropicTools(t *testing.T) {
 	domainTools := []api.ToolDef{
 		{
@@ -124,6 +128,8 @@ func TestToAnthropicTools(t *testing.T) {
 	}
 }
 
+// TestAnthropicProviderModelAccessors verifies Model returns the initialized identifier
+// and SetModel updates it dynamically.
 func TestAnthropicProviderModelAccessors(t *testing.T) {
 	provider := NewAnthropicProvider(nil, "initial-model", 4096, "test-prompt")
 
