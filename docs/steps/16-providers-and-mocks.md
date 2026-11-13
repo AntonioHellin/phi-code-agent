@@ -94,3 +94,5 @@ go run . --provider mock
    go run . --provider ollama
    OLLAMA_MODEL=llama3.2 go test -v -tags e2e ./internal/provider -run TestLiveOllamaSmoke
    ```
+
+> **Next Extension (Step 16.2)**: Static defaults and `/model` suggestions eventually drift as vendors deprecate models. See [Step 16.2: On-Demand Dynamic Model Discovery](16_2-dynamic-model-discovery.md) for adding an optional `ModelLister` capability interface and live `/models` discovery on a dedicated feature branch.
