@@ -11,23 +11,23 @@ Instead of burning an entire LLM inference round-trip when an operation fails fo
 
 ```mermaid
 flowchart TD
-    Invoke["Execute Tool Attempt #1"] --> Check{"Did execution fail?"}
+    Invoke["Execute Tool Attempt #N"] --> Check{"Did execution fail?"}
     Check -- "No" --> Success["Return output (is_error=false)"]
     Check -- "Yes" --> Transient{"Is error retryable?"}
     Transient -- "No" --> ReturnError["Return error to LLM (is_error=true)"]
     Transient -- "Yes" --> RetryCount{"Attempts < MaxRetries?"}
-    RetryCount -- "Yes" --> Backoff["Wait Backoff Duration"]
-    Backoff --> ReInvoke["Execute Tool Attempt #N"]
-    ReInvoke --> Check
-    RetryCount -- "No" --> Exhausted["Return 'Retries exhausted: [last error]'"]
+    RetryCount -- "Yes" --> Backoff["Wait Exponential Backoff (ctx.Done safe)"]
+    Backoff -- "Canceled" --> Canceled["Return canceled error (is_error=true)"]
+    Backoff -- "Elapsed" --> Invoke
+    RetryCount -- "No" --> Exhausted["Return last error (is_error=true)"]
 ```
 
 ## 2. Key Design Principles
 
 - **Decorator Pattern (Open/Closed Principle)**: Rather than polluting the core `Agent.Run` engine or hardcoding retry logic inside `executeTool`, implement a reusable `RetryDecorator` wrapping the `tool.Tool` interface in `internal/tool/retry.go`.
-- **Classifying Failure Types**: Distinguish between logical errors (e.g. `unknown flag --foo`, file does not exist) which the LLM must fix, vs environmental transient failures (e.g. process lock, network timeout, exit code 124) which the harness can retry.
-- **Configurable Backoff**: Avoid hammering the resource; use a simple exponential or linear backoff delay.
-- **Transparent Logging**: Provide terminal feedback (`[retry 2/3] retrying bash due to temporary lock...`) so the user knows why execution paused.
+- **Classifying Failure Types**: Distinguish between logical errors (e.g. `unknown flag --foo`, file does not exist) which the LLM must fix, vs environmental transient failures (e.g. process lock, network timeout, exit code 124) matched via `DefaultIsRetryable` or an injected `IsRetryable` hook.
+- **Context-Aware Capped Exponential Backoff**: Avoid hammering the resource with `base * 2^attempt` delays (defaulting to `100ms` when unset and capped at `10s` with signed-integer overflow guards), using `select` on `ctx.Done()` so user cancellations abort immediately without freezing the terminal.
+- **Fail-Safe Nil & Bounds Guards**: Nil `RetryDecorator` receivers, unset inner `Tool` fields, or negative `MaxRetries` never panic; errors travel back as `(errorMessage, true)`.
 
 ## 3. Implementation Requirements
 
@@ -40,24 +40,27 @@ flowchart TD
        IsRetryable func(output string, isError bool) bool
    }
    ```
-2. Configure `MaxRetries` (default: 2 or 3) and `RetryDelay` (e.g., 200ms with exponential backoff).
-3. Check error strings or exit codes to determine if a retry should be attempted.
-4. Wrap tools in `tool.Registry` or provide a helper `registry.RegisterWithRetry(t Tool, maxRetries int)`.
+2. Configure `MaxRetries` (normalized to `0` if negative) and `BaseDelay` (default `100ms`, exponential backoff `1 << attempt` capped at `10s`).
+3. Implement `DefaultIsRetryable` over a table of transient patterns (`defaultTransientPatterns`), while allowing callers to inject custom dynamic classifiers via `IsRetryable`.
+4. Add `registry.RegisterWithRetry(t Tool, maxRetries int)` in `internal/tool/tool.go` (ignoring `nil` tools safely) and wrap leaf OS/I/O tools (`bash`, `read_file`, `write_file`) in their `init()` hooks.
 
 ## 4. Verification & Exercises
 
-### Test 1: Simulating Transient Command Recovery
-Verify that a command that succeeds after retry is transparently handled.
+### Test 1: Automated Unit Verification (`internal/tool`)
+Run `go test -v ./internal/tool` to verify `retry_test.go` and `tool_test.go`:
+- **First-attempt success**: Returns immediately with zero backoff delay.
+- **Transient failure recovery**: Retries up to `MaxRetries` with exponential backoff and returns the successful output transparently (`isError=false`).
+- **Logical/permanent failure**: Bypassed immediately without retries so the LLM can self-correct without wasted latency.
+- **Exhausted retries & negative limits**: Stops cleanly after `1 + MaxRetries` attempts, normalizing negative `MaxRetries` to `0`.
+- **Nil safety & overflow capping**: Unset `Tool` / nil receivers return safe tool errors without panicking, and large exponents/delays cap cleanly at `10s`.
+- **Context cancellation & custom classifiers**: Aborts immediately when `ctx.Done()` fires during backoff, and respects injected `IsRetryable` hooks alongside `DefaultIsRetryable` pattern matching.
+- **Registry wrapping (`RegisterWithRetry`)**: Ignores `nil` tools and stores valid tools inside `*RetryDecorator` preserving schema metadata.
 
+### Test 2: Interactive Behavior
 **User Prompt:**
 ```text
 > Check system status
 ```
 
 **Expected Interaction & Output:**
-- If the first attempt encounters a lock or transient failure:
-  ```text
-  [tool retry] bash failed with transient error. Retrying in 500ms (attempt 1/2)...
-  [tool execute] bash succeeded on attempt 2.
-  ```
-- The model receives only the final successful output without wasting tokens on an intermediate error turn.
+- If a transient lock occurs and resolves on retry, the model receives only the final successful output without wasting tokens on an intermediate error turn.
