@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -118,6 +120,44 @@ func toAnthropicTools(tools []api.ToolDef) []anthropic.ToolUnionParam {
 	return params
 }
 
-// Compile-time assertion ensuring AnthropicProvider satisfies the Provider interface.
-var _ Provider = (*AnthropicProvider)(nil)
+// ListModels queries Anthropic's Models API on demand, returning non-retired model IDs.
+func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
+	if p == nil {
+		return nil, errors.New("anthropic provider is nil")
+	}
+	if p.client == nil {
+		return nil, errors.New("anthropic client is nil")
+	}
+
+	page, err := p.client.Models.List(ctx, anthropic.ModelListParams{})
+	if err != nil {
+		return nil, fmt.Errorf("anthropic list models: %w", err)
+	}
+
+	var models []string
+	for page != nil {
+		for _, m := range page.Data {
+			// Skip retired models whose inference endpoints reject requests.
+			if m.ID == "" || m.Lifecycle == anthropic.ModelInfoLifecycleRetired {
+				continue
+			}
+			models = append(models, m.ID)
+		}
+		if !page.HasMore {
+			break
+		}
+		page, err = page.GetNextPage()
+		if err != nil {
+			return nil, fmt.Errorf("anthropic list next models page: %w", err)
+		}
+	}
+
+	return models, nil
+}
+
+// Compile-time assertions ensuring AnthropicProvider satisfies Provider and ModelLister.
+var (
+	_ Provider    = (*AnthropicProvider)(nil)
+	_ ModelLister = (*AnthropicProvider)(nil)
+)
 

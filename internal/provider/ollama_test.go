@@ -336,3 +336,87 @@ func TestOllamaProvider_ErrorAndEdgeHandling(t *testing.T) {
 	})
 }
 
+// TestOllamaProvider_ListModels_WithHTTPTest verifies GET /api/tags catalog parsing,
+// whitespace/empty entry filtering, empty lists, HTTP errors, and nil/context guards.
+func TestOllamaProvider_ListModels_WithHTTPTest(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var nilProv *OllamaProvider
+		if _, err := nilProv.ListModels(context.Background()); err == nil || !strings.Contains(err.Error(), "nil") {
+			t.Fatalf("expected nil provider error, got %v", err)
+		}
+	})
+
+	t.Run("parses tags from GET /api/tags", func(t *testing.T) {
+		var capturedMethod string
+		var capturedPath string
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedMethod = r.Method
+			capturedPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"models": [
+					{"name": " llama3.2:latest "},
+					{"name": ""},
+					{"name": "qwen3-coder:latest"}
+				]
+			}`))
+		}))
+		defer srv.Close()
+
+		models, err := NewOllamaProvider(srv.URL, "llama3.2", "").ListModels(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected ListModels error: %v", err)
+		}
+		if capturedMethod != http.MethodGet || capturedPath != "/api/tags" {
+			t.Errorf("expected GET /api/tags, got %s %s", capturedMethod, capturedPath)
+		}
+		if len(models) != 2 || models[0] != "llama3.2:latest" || models[1] != "qwen3-coder:latest" {
+			t.Fatalf("expected [llama3.2:latest qwen3-coder:latest], got %v", models)
+		}
+	})
+
+	t.Run("empty tags catalog", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"models": []}`))
+		}))
+		defer srv.Close()
+
+		models, err := NewOllamaProvider(srv.URL, "llama3.2", "").ListModels(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(models) != 0 {
+			t.Fatalf("expected 0 models, got %v", models)
+		}
+	})
+
+	t.Run("HTTP 500 JSON error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error": "daemon unavailable"}`))
+		}))
+		defer srv.Close()
+
+		_, err := NewOllamaProvider(srv.URL, "llama3.2", "").ListModels(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "daemon unavailable") {
+			t.Fatalf("expected HTTP 500 error, got %v", err)
+		}
+	})
+
+	t.Run("cancelled context", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"models": []}`))
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := NewOllamaProvider(srv.URL, "llama3.2", "").ListModels(ctx)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
+}
+

@@ -24,9 +24,11 @@ bash, read_file, write_file, delegate. Be concise.`
 
 // Global application references shared across command handlers and delegation tools.
 var (
-	prov      provider.Provider
-	rootAgent *agent.Agent
-	compactor compact.CompactionStrategy = compact.NoCompaction{}
+	prov        provider.Provider
+	rootAgent   *agent.Agent
+	compactor   compact.CompactionStrategy = compact.NoCompaction{}
+	selectModel func(title string, options []string, current string) (string, bool)
+	onModelSet  func(model string)
 )
 
 // buildProvider acts as the Composition Root factory, selecting and wiring a concrete
@@ -81,9 +83,21 @@ func buildProvider(name, modelOverride, system string) (provider.Provider, error
 		return provider.NewGeminiProvider(client, model, 0, system), nil
 
 	case "mock":
-		mock := &provider.MockProvider{}
+		mock := &provider.MockProvider{
+			AvailableModels: []string{"mock", "mock-fast", "mock-reasoning"},
+		}
 		if model != "" {
 			mock.SetModel(model)
+			found := false
+			for _, candidate := range mock.AvailableModels {
+				if candidate == model {
+					found = true
+					break
+				}
+			}
+			if !found {
+				mock.AvailableModels = append(mock.AvailableModels, model)
+			}
 		}
 		return mock, nil
 
@@ -158,8 +172,10 @@ func main() {
 		return
 	}
 
-	// Connect interactive tool approval hook and start the Bubble Tea event loop
+	// Connect interactive UI hooks and start the Bubble Tea event loop
 	rootAgent.Confirm = app.Confirm
+	selectModel = app.SelectModel
+	onModelSet = app.SetModel
 	if err := app.Run(); err != nil {
 		fmt.Printf("TUI error: %v\n", err)
 	}

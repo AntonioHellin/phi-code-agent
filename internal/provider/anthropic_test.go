@@ -1,7 +1,14 @@
 package provider
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"phi-agent-code/internal/api"
 )
@@ -140,6 +147,81 @@ func TestAnthropicProviderModelAccessors(t *testing.T) {
 	provider.SetModel("updated-model")
 	if provider.Model() != "updated-model" {
 		t.Errorf("expected model 'updated-model', got '%s'", provider.Model())
+	}
+}
+
+// TestAnthropicProvider_ListModels_WithHTTPTest verifies paginated /v1/models discovery,
+// retired lifecycle filtering, and nil-receiver/client guards using httptest.NewServer.
+func TestAnthropicProvider_ListModels_WithHTTPTest(t *testing.T) {
+	var nilProv *AnthropicProvider
+	if _, err := nilProv.ListModels(context.Background()); err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected nil provider error, got %v", err)
+	}
+	if _, err := NewAnthropicProvider(nil, "claude-haiku-5-5", 100, "").ListModels(context.Background()); err == nil || !strings.Contains(err.Error(), "client is nil") {
+		t.Fatalf("expected nil client error, got %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("after_id") == "claude-retired" {
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"id": "claude-haiku-5-5",
+						"display_name": "Claude Haiku 5.5",
+						"type": "model",
+						"created_at": "2026-01-01T00:00:00Z",
+						"lifecycle": "active"
+					}
+				],
+				"has_more": false,
+				"first_id": "claude-haiku-5-5",
+				"last_id": "claude-haiku-5-5"
+			}`))
+			return
+		}
+
+		_, _ = w.Write([]byte(`{
+			"data": [
+				{
+					"id": "claude-sonnet-5-5",
+					"display_name": "Claude Sonnet 5.5",
+					"type": "model",
+					"created_at": "2026-01-01T00:00:00Z",
+					"lifecycle": "active"
+				},
+				{
+					"id": "claude-retired",
+					"display_name": "Retired Model",
+					"type": "model",
+					"created_at": "2024-01-01T00:00:00Z",
+					"lifecycle": "retired"
+				}
+			],
+			"has_more": true,
+			"first_id": "claude-sonnet-5-5",
+			"last_id": "claude-retired"
+		}`))
+	}))
+	defer srv.Close()
+
+	client := anthropic.NewClient(
+		option.WithAPIKey("test-anthropic-key"),
+		option.WithBaseURL(srv.URL),
+	)
+	prov := NewAnthropicProvider(&client, string(anthropic.ModelClaudeHaiku5_5), 4096, "")
+
+	models, err := prov.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected ListModels error: %v", err)
+	}
+
+	if len(models) != 2 || models[0] != "claude-sonnet-5-5" || models[1] != "claude-haiku-5-5" {
+		t.Fatalf("expected [claude-sonnet-5-5 claude-haiku-5-5], got %v", models)
 	}
 }
 
