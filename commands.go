@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -25,7 +27,8 @@ var commands = map[string]command{}
 
 func init() {
 	commands["help"] = command{description: "show available commands", run: cmdHelp}
-	commands["model"] = command{description: "show or change the model", run: cmdModel}
+	commands["model"] = command{description: "show active model or switch to <name>", run: cmdModel}
+	commands["models"] = command{description: "browse and select a model interactively", run: cmdModels}
 	commands["clear"] = command{description: "clear conversation history", run: cmdClear}
 	commands["tools"] = command{description: "list available tools", run: cmdTools}
 	commands["subagents"] = command{description: "list available subagent profiles", run: cmdSubagents}
@@ -113,31 +116,165 @@ func providerKey(p provider.Provider) string {
 	}
 }
 
-// cmdModel displays the active model plus backend-relevant suggestions, or dynamically updates it.
-func cmdModel(args string) {
-	if args == "" {
-		fmt.Printf("current: %s\n", prov.Model())
-		fmt.Println("suggestions:")
-		if key := providerKey(prov); key != "" {
-			if models := knownModels[key]; len(models) > 0 {
-				for _, model := range models {
-					fmt.Printf("  %s\n", model)
-				}
-				return
+// discoverModels queries the active provider on demand when it implements provider.ModelLister.
+func discoverModels(p provider.Provider) ([]string, bool, error) {
+	lister, ok := p.(provider.ModelLister)
+	if !ok {
+		return nil, false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	models, err := lister.ListModels(ctx)
+	return models, true, err
+}
+
+// staticSuggestions returns curated fallback models for the active provider when available.
+func staticSuggestions(p provider.Provider) []string {
+	if key := providerKey(p); key != "" {
+		return knownModels[key]
+	}
+	return nil
+}
+
+// printStaticSuggestions displays curated fallback model suggestions scoped to the active provider.
+func printStaticSuggestions(p provider.Provider) {
+	if key := providerKey(p); key != "" {
+		if models := knownModels[key]; len(models) > 0 {
+			for _, model := range models {
+				fmt.Printf("  %s\n", model)
 			}
-			fmt.Println("  (any custom identifier for mock)")
 			return
 		}
-		for _, backend := range []string{"gemini", "anthropic", "ollama"} {
-			fmt.Printf("  [%s]\n", backend)
-			for _, model := range knownModels[backend] {
-				fmt.Printf("    %s\n", model)
-			}
-		}
+		fmt.Println("  (no fallback models registered for active provider)")
 		return
 	}
-	prov.SetModel(args)
-	fmt.Printf("model: %s\n", args)
+	for _, backend := range []string{"gemini", "anthropic", "ollama"} {
+		fmt.Printf("  [%s]\n", backend)
+		for _, model := range knownModels[backend] {
+			fmt.Printf("    %s\n", model)
+		}
+	}
+}
+
+type modelCatalog struct {
+	models    []string
+	fromLive  bool
+	supported bool
+	err       error
+}
+
+// resolveModels returns the active provider's live generative models, falling back to curated suggestions.
+func resolveModels(p provider.Provider) modelCatalog {
+	models, supported, err := discoverModels(p)
+	if supported && err == nil && len(models) > 0 {
+		return modelCatalog{
+			models:    models,
+			fromLive:  true,
+			supported: true,
+		}
+	}
+	return modelCatalog{
+		models:    staticSuggestions(p),
+		fromLive:  false,
+		supported: supported,
+		err:       err,
+	}
+}
+
+// ownerProvider checks curated backend catalogs to identify which provider owns candidate, if any.
+func ownerProvider(candidate string) string {
+	for backend, list := range knownModels {
+		if slices.Contains(list, candidate) {
+			return backend
+		}
+	}
+	return ""
+}
+
+// validateModel verifies candidate against the active provider's live catalog (or curated fallback).
+func validateModel(p provider.Provider, candidate string) error {
+	if p == nil {
+		return fmt.Errorf("error: no active provider configured")
+	}
+	cat := resolveModels(p)
+	if slices.Contains(cat.models, candidate) {
+		return nil
+	}
+
+	activeKey := providerKey(p)
+	if activeKey == "" {
+		activeKey = "unknown"
+	}
+	if owner := ownerProvider(candidate); owner != "" && owner != activeKey {
+		return fmt.Errorf("error: model %q belongs to provider %q, not active provider %q (use /models to browse)", candidate, owner, activeKey)
+	}
+	if len(cat.models) == 0 {
+		return fmt.Errorf("error: unknown model %q — not listed in any provider catalog (use /models to browse)", candidate)
+	}
+	if !cat.fromLive && cat.err != nil {
+		return fmt.Errorf("error: unknown model %q for active provider %q (live lookup failed: %v; use /models to see curated models)", candidate, activeKey, cat.err)
+	}
+	return fmt.Errorf("error: unknown model %q for active provider %q (use /models to see available models)", candidate, activeKey)
+}
+
+// applyModel switches the active provider model, syncs the TUI banner, and confirms in stdout.
+func applyModel(model string) {
+	prov.SetModel(model)
+	if onModelSet != nil {
+		onModelSet(model)
+	}
+	fmt.Printf("model: %s\n", model)
+}
+
+// cmdModels queries live models supported by the active provider and opens the interactive 5-row picker.
+func cmdModels(_ string) {
+	cat := resolveModels(prov)
+	if !cat.fromLive {
+		switch {
+		case !cat.supported:
+			fmt.Println("active provider does not support live model discovery; curated suggestions:")
+		case cat.err != nil:
+			fmt.Printf("live model discovery failed: %v\ncurated suggestions:\n", cat.err)
+		default:
+			fmt.Println("no generative models returned by provider; curated suggestions:")
+		}
+		if len(cat.models) == 0 {
+			printStaticSuggestions(prov)
+			return
+		}
+	}
+
+	if selectModel != nil {
+		chosen, ok := selectModel("Select model", cat.models, prov.Model())
+		if !ok {
+			fmt.Println("model selection canceled")
+			return
+		}
+		applyModel(chosen)
+		return
+	}
+
+	fmt.Printf("available models (%d):\n", len(cat.models))
+	for _, model := range cat.models {
+		fmt.Printf("  %s\n", model)
+	}
+}
+
+// cmdModel displays the active model when invoked without arguments, or validates and switches to the named model.
+func cmdModel(args string) {
+	name := strings.TrimSpace(args)
+	if name == "" {
+		fmt.Printf("current: %s\n", prov.Model())
+		fmt.Println("use /models to browse or /model <name> to switch")
+		return
+	}
+	if err := validateModel(prov, name); err != nil {
+		fmt.Println(err)
+		return
+	}
+	applyModel(name)
 }
 
 // cmdClear resets the in-memory conversation history without reallocating backing memory.

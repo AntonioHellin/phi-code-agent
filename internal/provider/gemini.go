@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"google.golang.org/genai"
@@ -215,6 +216,51 @@ func toGeminiTools(tools []api.ToolDef) []*genai.Tool {
 	return []*genai.Tool{{FunctionDeclarations: decls}}
 }
 
-// Compile-time assertion ensuring GeminiProvider satisfies the Provider interface.
-var _ Provider = (*GeminiProvider)(nil)
+// ListModels queries Gemini's model catalog on demand, returning generative model IDs
+// that support "generateContent" with the leading "models/" resource prefix removed.
+func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
+	if p == nil {
+		return nil, errors.New("gemini provider is nil")
+	}
+	if p.client == nil {
+		return nil, errors.New("gemini client is nil")
+	}
+
+	page, err := p.client.Models.List(ctx, &genai.ListModelsConfig{})
+	if err != nil {
+		return nil, fmt.Errorf("gemini list models: %w", err)
+	}
+
+	var models []string
+	for {
+		for _, m := range page.Items {
+			// Exclude embedding, TTS, or image-only entries that cannot handle chat generation.
+			if m == nil || !slices.Contains(m.SupportedActions, "generateContent") {
+				continue
+			}
+			name := strings.TrimPrefix(m.Name, "models/")
+			if name != "" {
+				models = append(models, name)
+			}
+		}
+		if page.NextPageToken == "" {
+			break
+		}
+		page, err = page.Next(ctx)
+		if errors.Is(err, genai.ErrPageDone) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("gemini list next models page: %w", err)
+		}
+	}
+
+	return models, nil
+}
+
+// Compile-time assertions ensuring GeminiProvider satisfies Provider and ModelLister.
+var (
+	_ Provider    = (*GeminiProvider)(nil)
+	_ ModelLister = (*GeminiProvider)(nil)
+)
 

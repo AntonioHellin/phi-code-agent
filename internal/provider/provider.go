@@ -15,3 +15,9 @@ type Provider interface {
 	Model() string
 	SetModel(name string)
 }
+
+// ModelLister is an optional capability interface (Interface Segregation Principle) implemented
+// by providers that can enumerate available models from their backend catalog on demand.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]string, error)
+}

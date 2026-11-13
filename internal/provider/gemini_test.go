@@ -337,3 +337,69 @@ func TestGeminiProvider_GuardsAndErrors(t *testing.T) {
 	})
 }
 
+// TestGeminiProvider_ListModels_WithHTTPTest verifies paginated /v1beta/models queries,
+// filtering to models supporting "generateContent", "models/" prefix stripping, and nil guards.
+func TestGeminiProvider_ListModels_WithHTTPTest(t *testing.T) {
+	var nilProv *GeminiProvider
+	if _, err := nilProv.ListModels(context.Background()); err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected nil provider error, got %v", err)
+	}
+	if _, err := NewGeminiProvider(nil, "gemini-4-hydrogen", 0, "").ListModels(context.Background()); err == nil || !strings.Contains(err.Error(), "client is nil") {
+		t.Fatalf("expected nil client error, got %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1beta/models" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("pageToken") == "page2" {
+			_, _ = w.Write([]byte(`{
+				"models": [
+					{
+						"name": "models/gemini-3.8-flash",
+						"supportedGenerationMethods": ["generateContent", "countTokens"]
+					}
+				]
+			}`))
+			return
+		}
+
+		_, _ = w.Write([]byte(`{
+			"models": [
+				{
+					"name": "models/gemini-4-hydrogen",
+					"supportedGenerationMethods": ["generateContent"]
+				},
+				{
+					"name": "models/text-embedding-004",
+					"supportedGenerationMethods": ["embedContent"]
+				}
+			],
+			"nextPageToken": "page2"
+		}`))
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:      "test-key",
+		Backend:     genai.BackendGeminiAPI,
+		HTTPClient:  srv.Client(),
+		HTTPOptions: genai.HTTPOptions{BaseURL: srv.URL},
+	})
+	if err != nil {
+		t.Fatalf("failed creating genai client: %v", err)
+	}
+
+	models, err := NewGeminiProvider(client, "gemini-4-hydrogen", 0, "").ListModels(ctx)
+	if err != nil {
+		t.Fatalf("unexpected ListModels error: %v", err)
+	}
+
+	if len(models) != 2 || models[0] != "gemini-4-hydrogen" || models[1] != "gemini-3.8-flash" {
+		t.Fatalf("expected [gemini-4-hydrogen gemini-3.8-flash], got %v", models)
+	}
+}
+

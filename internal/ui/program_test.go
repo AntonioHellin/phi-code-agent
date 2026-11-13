@@ -349,3 +349,183 @@ func TestRenderBannerVisual(t *testing.T) {
 	t.Logf("\n%s", banner)
 }
 
+// TestHarnessMouseWheelScroll verifies mouse wheel scrollback in idle and running states.
+func TestHarnessMouseWheelScroll(t *testing.T) {
+	h := newTestHarness()
+	h.viewport = viewport.New(80, 5)
+	for i := 0; i < 30; i++ {
+		h.output.WriteString(fmt.Sprintf("line %d\n", i))
+	}
+	h.viewport.SetContent(h.output.String())
+	h.viewport.GotoBottom()
+	h.followBottom = true
+
+	// Mouse wheel up moves off bottom and disables followBottom
+	updatedUp, _ := h.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	mUp := updatedUp.(harness)
+	if mUp.followBottom {
+		t.Errorf("expected mouse wheel up to set followBottom to false")
+	}
+	if mUp.viewport.AtBottom() {
+		t.Errorf("expected mouse wheel up to scroll above bottom")
+	}
+
+	// Mouse wheel down returns to bottom and re-enables followBottom
+	updatedDown, _ := mUp.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	mDown := updatedDown.(harness)
+	if !mDown.viewport.AtBottom() {
+		t.Errorf("expected mouse wheel down to scroll back to bottom")
+	}
+	if !mDown.followBottom {
+		t.Errorf("expected reaching bottom via wheel down to restore followBottom")
+	}
+}
+
+// TestHarnessSelectFlow verifies the bounded 5-row picker navigation, viewport sizing, confirm, and cancel.
+func TestHarnessSelectFlow(t *testing.T) {
+	options := []string{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"}
+
+	t.Run("windowed rendering, wheel and arrow navigation, enter confirms", func(t *testing.T) {
+		h := newTestHarness()
+		sized, _ := h.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+		h = sized.(harness)
+
+		replyCh := make(chan SelectResult, 1)
+		updated, _ := h.Update(SelectRequest{
+			Title:   "Select model",
+			Options: options,
+			Current: "m6",
+			Reply:   replyCh,
+		})
+		m := updated.(harness)
+
+		if m.state != stateSelectingModel {
+			t.Fatalf("expected stateSelectingModel (%d), got %d", stateSelectingModel, m.state)
+		}
+		if m.selectCursor != 6 || m.selectOffset != 2 {
+			t.Fatalf("expected cursor=6 offset=2 for Current=m6, got cursor=%d offset=%d", m.selectCursor, m.selectOffset)
+		}
+		// Layout compensation: 40 - (4 + 5) = 31
+		if m.viewport.Height != 31 {
+			t.Errorf("expected compensated viewport height 31 while picker open, got %d", m.viewport.Height)
+		}
+
+		view := m.View()
+		if !strings.Contains(view, "Select model (3-7 of 8)") {
+			t.Errorf("expected windowed counter (3-7 of 8), got:\n%s", view)
+		}
+		if !strings.Contains(view, "m6 (current)") {
+			t.Errorf("expected active model badge in view, got:\n%s", view)
+		}
+		if strings.Contains(view, "  m0") || strings.Contains(view, "  m7") {
+			t.Errorf("expected non-windowed items m0/m7 to be hidden outside 5-row window, got:\n%s", view)
+		}
+
+		// Arrow down shifts cursor and window to bottom (m7, 4-8 of 8)
+		afterDown, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = afterDown.(harness)
+		if m.selectCursor != 7 || m.selectOffset != 3 {
+			t.Errorf("expected cursor=7 offset=3 after KeyDown, got cursor=%d offset=%d", m.selectCursor, m.selectOffset)
+		}
+
+		// Mouse wheel up moves selection back to m6
+		afterWheelUp, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+		m = afterWheelUp.(harness)
+		if m.selectCursor != 6 {
+			t.Errorf("expected cursor=6 after MouseButtonWheelUp, got %d", m.selectCursor)
+		}
+
+		// Confirm with enter
+		afterEnter, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		mDone := afterEnter.(harness)
+		if mDone.state != stateRunning {
+			t.Errorf("expected stateRunning after enter, got %d", mDone.state)
+		}
+		if mDone.viewport.Height != 35 {
+			t.Errorf("expected viewport height restored to 35 after closing picker, got %d", mDone.viewport.Height)
+		}
+
+		select {
+		case res := <-replyCh:
+			if res.Canceled || res.Selected != "m6" {
+				t.Errorf("expected Selected='m6' Canceled=false, got %+v", res)
+			}
+		default:
+			t.Fatal("expected SelectResult on reply channel")
+		}
+	})
+
+	t.Run("esc cancels selection", func(t *testing.T) {
+		h := newTestHarness()
+		replyCh := make(chan SelectResult, 1)
+
+		updated, _ := h.Update(SelectRequest{
+			Title:   "Select model",
+			Options: options,
+			Current: "m0",
+			Reply:   replyCh,
+		})
+		m := updated.(harness)
+
+		afterEsc, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		mDone := afterEsc.(harness)
+		if mDone.state != stateRunning {
+			t.Errorf("expected stateRunning after esc, got %d", mDone.state)
+		}
+
+		select {
+		case res := <-replyCh:
+			if !res.Canceled || res.Selected != "" {
+				t.Errorf("expected Canceled=true Selected='', got %+v", res)
+			}
+		default:
+			t.Fatal("expected SelectResult on reply channel after esc")
+		}
+	})
+
+	t.Run("empty options reply immediately without entering picker", func(t *testing.T) {
+		h := newTestHarness()
+		replyCh := make(chan SelectResult, 1)
+
+		updated, _ := h.Update(SelectRequest{
+			Title:   "Select model",
+			Options: nil,
+			Reply:   replyCh,
+		})
+		m := updated.(harness)
+		if m.state != stateIdle {
+			t.Errorf("expected stateIdle for empty options, got %d", m.state)
+		}
+		res := <-replyCh
+		if !res.Canceled {
+			t.Errorf("expected empty options to reply Canceled=true, got %+v", res)
+		}
+	})
+}
+
+// TestHarnessModelUpdate verifies runtime banner updates preserve scrollback history.
+func TestHarnessModelUpdate(t *testing.T) {
+	initialBanner := RenderBanner("old-model", -1)
+	out := &strings.Builder{}
+	out.WriteString(initialBanner)
+	out.WriteString("history line\n")
+
+	h := newTestHarness()
+	h.modelName = "old-model"
+	h.bannerLen = len(initialBanner)
+	h.output = out
+
+	updated, _ := h.Update(modelUpdateMsg("new-model"))
+	m := updated.(harness)
+
+	if m.modelName != "new-model" {
+		t.Errorf("expected modelName='new-model', got %q", m.modelName)
+	}
+	if !strings.Contains(m.output.String(), "new-model") {
+		t.Errorf("expected refreshed banner to include 'new-model'")
+	}
+	if !strings.Contains(m.output.String(), "history line\n") {
+		t.Errorf("expected history line to be preserved across banner refresh")
+	}
+}
+

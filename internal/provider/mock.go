@@ -11,10 +11,11 @@ import (
 // MockProvider is an in-memory Provider that replays scripted responses in sequence,
 // records cloned turn histories, and serves offline defaults when exhausted.
 type MockProvider struct {
-	Responses []api.Response  // Pre-scripted responses popped sequentially by Send
-	CallIndex int             // Cursor tracking the next response to return
-	History   [][]api.Message // Immutable per-turn snapshots of incoming message slices
-	model     string          // Active model name reported by Model(); defaults to "mock" when empty
+	Responses       []api.Response  // Pre-scripted responses popped sequentially by Send
+	CallIndex       int             // Cursor tracking the next response to return
+	History         [][]api.Message // Immutable per-turn snapshots of incoming message slices
+	AvailableModels []string        // Optional deterministic catalog returned by ListModels
+	model           string          // Active model name reported by Model(); defaults to "mock" when empty
 }
 
 // Model returns the configured mock model name, defaulting to "mock" when unset.
@@ -65,5 +66,25 @@ func (m *MockProvider) SetModel(name string) {
 	}
 }
 
-// Compile-time assertion ensuring MockProvider satisfies the Provider interface.
-var _ Provider = (*MockProvider)(nil)
+// ListModels returns a defensive copy of AvailableModels (or the active model when unset)
+// so tests and --provider mock sessions can exercise ModelLister offline.
+func (m *MockProvider) ListModels(ctx context.Context) ([]string, error) {
+	if m == nil {
+		return nil, errors.New("mock provider is nil")
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if len(m.AvailableModels) > 0 {
+		return slices.Clone(m.AvailableModels), nil
+	}
+	return []string{m.Model()}, nil
+}
+
+// Compile-time assertions ensuring MockProvider satisfies Provider and ModelLister.
+var (
+	_ Provider    = (*MockProvider)(nil)
+	_ ModelLister = (*MockProvider)(nil)
+)

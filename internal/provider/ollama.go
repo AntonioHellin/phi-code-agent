@@ -311,6 +311,66 @@ func toOllamaTools(tools []api.ToolDef) []ollamaTool {
 	return out
 }
 
-// Compile-time assertion ensuring OllamaProvider satisfies the Provider interface.
-var _ Provider = (*OllamaProvider)(nil)
+// ollamaTagsResponse models the JSON payload returned by Ollama's GET /api/tags endpoint.
+type ollamaTagsResponse struct {
+	Models []ollamaModelTag `json:"models"`
+	Error  string           `json:"error,omitempty"`
+}
+
+// ollamaModelTag represents a locally pulled model entry in /api/tags.
+type ollamaModelTag struct {
+	Name string `json:"name"`
+}
+
+// ListModels queries Ollama's local /api/tags catalog on demand and returns installed model names.
+func (p *OllamaProvider) ListModels(ctx context.Context) ([]string, error) {
+	if p == nil {
+		return nil, errors.New("ollama provider is nil")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create ollama tags request: %w", err)
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ollama tags request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read ollama tags response: %w", err)
+	}
+
+	var tagsResp ollamaTagsResponse
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if json.Unmarshal(bodyBytes, &tagsResp) == nil && tagsResp.Error != "" {
+			return nil, fmt.Errorf("ollama HTTP %d: %s", resp.StatusCode, tagsResp.Error)
+		}
+		return nil, fmt.Errorf("ollama HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	if err := json.Unmarshal(bodyBytes, &tagsResp); err != nil {
+		return nil, fmt.Errorf("decode ollama tags response: %w", err)
+	}
+	if tagsResp.Error != "" {
+		return nil, fmt.Errorf("ollama error: %s", tagsResp.Error)
+	}
+
+	models := make([]string, 0, len(tagsResp.Models))
+	for _, m := range tagsResp.Models {
+		if name := strings.TrimSpace(m.Name); name != "" {
+			models = append(models, name)
+		}
+	}
+	return models, nil
+}
+
+// Compile-time assertions ensuring OllamaProvider satisfies Provider and ModelLister.
+var (
+	_ Provider    = (*OllamaProvider)(nil)
+	_ ModelLister = (*OllamaProvider)(nil)
+)
 

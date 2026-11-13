@@ -177,3 +177,45 @@ func TestMockProvider_GuardsAndContextCancellation(t *testing.T) {
 	}
 }
 
+// TestMockProvider_ListModels verifies ModelLister behavior on MockProvider, including nil-receiver
+// and canceled-context guards, active-model fallback, and defensive slice cloning.
+func TestMockProvider_ListModels(t *testing.T) {
+	var nilMock *MockProvider
+	if _, err := nilMock.ListModels(context.Background()); err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected nil receiver ListModels error, got %v", err)
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := (&MockProvider{}).ListModels(canceledCtx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	fallbackMock := &MockProvider{}
+	fallbackMock.SetModel("mock-custom")
+	gotDefault, err := fallbackMock.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected fallback ListModels error: %v", err)
+	}
+	if len(gotDefault) != 1 || gotDefault[0] != "mock-custom" {
+		t.Fatalf("expected [mock-custom] fallback, got %v", gotDefault)
+	}
+
+	configured := &MockProvider{
+		AvailableModels: []string{"mock-a", "mock-b"},
+	}
+	gotList, err := configured.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected configured ListModels error: %v", err)
+	}
+	if len(gotList) != 2 || gotList[0] != "mock-a" || gotList[1] != "mock-b" {
+		t.Fatalf("expected [mock-a mock-b], got %v", gotList)
+	}
+
+	// Mutating the returned slice must not mutate MockProvider.AvailableModels.
+	gotList[0] = "mutated"
+	if configured.AvailableModels[0] != "mock-a" {
+		t.Errorf("expected internal AvailableModels slice to remain 'mock-a', got %q", configured.AvailableModels[0])
+	}
+}
+

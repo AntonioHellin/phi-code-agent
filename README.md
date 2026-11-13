@@ -151,7 +151,7 @@ go run . --provider ollama
 go run . --provider mock
 ```
 
-Inside the interactive TUI, use `/model` to view the active model and compatible suggestions for the running provider, or `/model <name>` to switch models on the fly.
+Inside the interactive TUI, use `/models` to discover live models in a scrollable 5-row picker, `/model` to see only the active model, or `/model <name>` to validate and switch to a supported model on the fly.
 
 > **Windows + WSL2 tip**: WSL2 runs inside an isolated Linux network/environment namespace. If you store API keys in Windows Environment Variables and run Go inside Ubuntu WSL2, pass them across with `WSLENV="ANTHROPIC_API_KEY:GEMINI_API_KEY"` (and restart your terminal/IDE), and run `ollama serve` directly inside Ubuntu (or set `OLLAMA_BASE_URL` if running Ollama on Windows).
 
