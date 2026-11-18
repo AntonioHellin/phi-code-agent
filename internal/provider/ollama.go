@@ -1,12 +1,14 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,8 +19,11 @@ import (
 const (
 	// defaultOllamaBaseURL targets a standard local Ollama daemon when no override is given.
 	defaultOllamaBaseURL = "http://localhost:11434"
-	// defaultOllamaTimeout prevents local inference or hung sockets from blocking the agent loop indefinitely.
-	defaultOllamaTimeout = 2 * time.Minute
+	// defaultOllamaDialTimeout bounds TCP connection establishment when the local daemon is down.
+	defaultOllamaDialTimeout = 10 * time.Second
+	// defaultOllamaHeaderTimeout bounds initial response headers (including cold model load)
+	// without setting http.Client.Timeout, which would otherwise abort long-running streams mid-body.
+	defaultOllamaHeaderTimeout = 2 * time.Minute
 )
 
 // OllamaProvider implements the Provider interface against Ollama's /api/chat REST endpoint
@@ -35,7 +40,7 @@ type ollamaChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []ollamaMessage `json:"messages"`
 	Tools    []ollamaTool    `json:"tools,omitempty"`
-	Stream   bool            `json:"stream"` // Explicit false disables NDJSON streaming so Send parses a single JSON payload
+	Stream   bool            `json:"stream"` // Explicit false for single JSON Send; true for NDJSON Stream
 }
 
 // ollamaChatResponse models a non-streaming response payload returned by POST /api/chat.
@@ -95,8 +100,16 @@ func NewOllamaProvider(baseURL, model, system string) *OllamaProvider {
 		cleanedURL = defaultOllamaBaseURL
 	}
 
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: defaultOllamaDialTimeout}).DialContext,
+		ResponseHeaderTimeout: defaultOllamaHeaderTimeout,
+	}
+
 	return &OllamaProvider{
-		client:  &http.Client{Timeout: defaultOllamaTimeout},
+		// Leave Client.Timeout=0 so active NDJSON streams can exceed header-wait duration cleanly;
+		// caller ctx controls overall cancellation.
+		client:  &http.Client{Transport: transport},
 		baseURL: cleanedURL,
 		model:   model,
 		system:  system,
@@ -113,67 +126,78 @@ func (p *OllamaProvider) SetModel(name string) {
 	p.model = name
 }
 
-// Send translates domain messages and tool definitions into an Ollama /api/chat request,
-// executes the HTTP call with context cancellation, and normalizes the response back into api.Response.
-func (p *OllamaProvider) Send(ctx context.Context, messages []api.Message, tools []api.ToolDef) (api.Response, error) {
+// validate guards against nil provider receivers or uninitialized HTTP clients.
+func (p *OllamaProvider) validate() error {
 	if p == nil {
-		return api.Response{}, errors.New("ollama provider is nil")
+		return errors.New("ollama provider is nil")
 	}
+	if p.client == nil {
+		return errors.New("ollama client is nil")
+	}
+	return nil
+}
 
-	reqBody := ollamaChatRequest{
+// buildParams constructs the shared Ollama /api/chat request body for both Send and Stream.
+func (p *OllamaProvider) buildParams(messages []api.Message, tools []api.ToolDef, stream bool) ollamaChatRequest {
+	return ollamaChatRequest{
 		Model:    p.model,
 		Messages: toOllamaMessages(p.system, messages),
 		Tools:    toOllamaTools(tools),
-		Stream:   false,
+		Stream:   stream,
+	}
+}
+
+// doChatRequest serializes the Ollama /api/chat request, executes the HTTP call,
+// and validates non-2xx responses uniformly for Send and Stream.
+func (p *OllamaProvider) doChatRequest(ctx context.Context, messages []api.Message, tools []api.ToolDef, stream bool) (*http.Response, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
 	}
 
-	payload, err := json.Marshal(reqBody)
+	payload, err := json.Marshal(p.buildParams(messages, tools, stream))
 	if err != nil {
-		return api.Response{}, fmt.Errorf("marshal ollama request: %w", err)
+		return nil, fmt.Errorf("marshal ollama request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/api/chat", bytes.NewReader(payload))
 	if err != nil {
-		return api.Response{}, fmt.Errorf("create ollama request: %w", err)
+		return nil, fmt.Errorf("create ollama request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return api.Response{}, fmt.Errorf("ollama request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return api.Response{}, fmt.Errorf("read ollama response: %w", err)
+		return nil, fmt.Errorf("ollama request failed: %w", err)
 	}
 
-	var chatResp ollamaChatResponse
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		// Surface Ollama's structured JSON error message when available.
-		if json.Unmarshal(bodyBytes, &chatResp) == nil && chatResp.Error != "" {
-			return api.Response{}, fmt.Errorf("ollama HTTP %d: %s", resp.StatusCode, chatResp.Error)
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("ollama HTTP %d (read error: %w)", resp.StatusCode, readErr)
 		}
-		return api.Response{}, fmt.Errorf("ollama HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+		var errResp ollamaChatResponse
+		// Surface Ollama's structured JSON error message when available.
+		if json.Unmarshal(bodyBytes, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("ollama HTTP %d: %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("ollama HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
 	}
 
-	if err := json.Unmarshal(bodyBytes, &chatResp); err != nil {
-		return api.Response{}, fmt.Errorf("decode ollama response: %w", err)
-	}
-	if chatResp.Error != "" {
-		return api.Response{}, fmt.Errorf("ollama error: %s", chatResp.Error)
-	}
+	return resp, nil
+}
 
+// buildOllamaResponse converts accumulated text and tool calls into the domain api.Response contract.
+func buildOllamaResponse(text string, toolCalls []ollamaToolCall) api.Response {
 	var outBlocks []api.Block
-	if chatResp.Message.Content != "" {
+	if text != "" {
 		outBlocks = append(outBlocks, api.Block{
 			Type: api.BlockText,
-			Text: chatResp.Message.Content,
+			Text: text,
 		})
 	}
 
-	for i, tc := range chatResp.Message.ToolCalls {
+	for i, tc := range toolCalls {
 		callID := tc.ID
 		if callID == "" {
 			// Some Ollama models omit tool call IDs; synthesize one so Agent can pair results cleanly.
@@ -195,14 +219,89 @@ func (p *OllamaProvider) Send(ctx context.Context, messages []api.Message, tools
 
 	// Normalize Ollama's completion reason into the Agent loop's expected StopReason contract.
 	stopReason := "end_turn"
-	if len(chatResp.Message.ToolCalls) > 0 {
+	if len(toolCalls) > 0 {
 		stopReason = "tool_use"
 	}
 
 	return api.Response{
 		Content:    outBlocks,
 		StopReason: stopReason,
-	}, nil
+	}
+}
+
+// Send translates domain messages and tool definitions into an Ollama /api/chat request,
+// executes the HTTP call with context cancellation, and normalizes the response back into api.Response.
+func (p *OllamaProvider) Send(ctx context.Context, messages []api.Message, tools []api.ToolDef) (api.Response, error) {
+	resp, err := p.doChatRequest(ctx, messages, tools, false)
+	if err != nil {
+		return api.Response{}, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return api.Response{}, fmt.Errorf("read ollama response: %w", err)
+	}
+
+	var chatResp ollamaChatResponse
+	if err := json.Unmarshal(bodyBytes, &chatResp); err != nil {
+		return api.Response{}, fmt.Errorf("decode ollama response: %w", err)
+	}
+	if chatResp.Error != "" {
+		return api.Response{}, fmt.Errorf("ollama error: %s", chatResp.Error)
+	}
+
+	return buildOllamaResponse(chatResp.Message.Content, chatResp.Message.ToolCalls), nil
+}
+
+// Stream implements provider.Streamer against Ollama's NDJSON /api/chat stream ("stream": true).
+// It decodes each JSON line incrementally, forwards text tokens to onChunk, and gathers tool calls.
+func (p *OllamaProvider) Stream(ctx context.Context, messages []api.Message, tools []api.ToolDef, onChunk func(string)) (api.Response, error) {
+	resp, err := p.doChatRequest(ctx, messages, tools, true)
+	if err != nil {
+		return api.Response{}, err
+	}
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+
+	var textBuf strings.Builder
+	var toolCalls []ollamaToolCall
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var chunk ollamaChatResponse
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			return api.Response{}, fmt.Errorf("decode ollama stream chunk: %w", err)
+		}
+		if chunk.Error != "" {
+			return api.Response{}, fmt.Errorf("ollama error: %s", chunk.Error)
+		}
+
+		if chunk.Message.Content != "" {
+			textBuf.WriteString(chunk.Message.Content)
+			if onChunk != nil {
+				onChunk(chunk.Message.Content)
+			}
+		}
+		if len(chunk.Message.ToolCalls) > 0 {
+			toolCalls = append(toolCalls, chunk.Message.ToolCalls...)
+		}
+		if chunk.Done {
+			break
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return api.Response{}, fmt.Errorf("read ollama stream: %w", err)
+	}
+
+	return buildOllamaResponse(textBuf.String(), toolCalls), nil
 }
 
 // toOllamaMessages converts domain conversation history into Ollama's message array,
@@ -368,9 +467,10 @@ func (p *OllamaProvider) ListModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// Compile-time assertions ensuring OllamaProvider satisfies Provider and ModelLister.
+// Compile-time assertions ensuring OllamaProvider satisfies Provider, ModelLister, and Streamer.
 var (
 	_ Provider    = (*OllamaProvider)(nil)
 	_ ModelLister = (*OllamaProvider)(nil)
+	_ Streamer    = (*OllamaProvider)(nil)
 )
 

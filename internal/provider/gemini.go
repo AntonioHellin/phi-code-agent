@@ -47,19 +47,22 @@ func (p *GeminiProvider) SetModel(name string) {
 	}
 }
 
-// Send fulfills the Provider interface by translating domain history and tool definitions
-// into Gemini GenerateContent calls and normalizing candidates back into api.Response.
-func (p *GeminiProvider) Send(ctx context.Context, messages []api.Message, tools []api.ToolDef) (api.Response, error) {
+// validate guards against nil receivers, uninitialized clients, or empty model configuration.
+func (p *GeminiProvider) validate() error {
 	if p == nil {
-		return api.Response{}, errors.New("gemini provider is nil")
+		return errors.New("gemini provider is nil")
 	}
 	if p.client == nil {
-		return api.Response{}, errors.New("gemini client is nil")
+		return errors.New("gemini client is nil")
 	}
 	if p.model == "" {
-		return api.Response{}, errors.New("gemini model is empty")
+		return errors.New("gemini model is empty")
 	}
+	return nil
+}
 
+// buildParams constructs shared Gemini generation settings (system, token cap, tools) for Send and Stream.
+func (p *GeminiProvider) buildParams(tools []api.ToolDef) *genai.GenerateContentConfig {
 	cfg := &genai.GenerateContentConfig{}
 	if strings.TrimSpace(p.system) != "" {
 		cfg.SystemInstruction = &genai.Content{
@@ -72,65 +75,150 @@ func (p *GeminiProvider) Send(ctx context.Context, messages []api.Message, tools
 	if len(tools) > 0 {
 		cfg.Tools = toGeminiTools(tools)
 	}
+	return cfg
+}
 
-	resp, err := p.client.Models.GenerateContent(ctx, p.Model(), toGeminiContents(messages), cfg)
-	if err != nil {
-		return api.Response{}, fmt.Errorf("gemini generate content: %w", err)
+// collectGeminiParts extracts non-thought text and FunctionCall parts from one SDK response chunk,
+// optionally forwarding text deltas to onChunk while accumulating full domain blocks and surfacing blocks/errors.
+func collectGeminiParts(resp *genai.GenerateContentResponse, textBuf *strings.Builder, toolBlocks *[]api.Block, callSeq *int, onChunk func(string)) error {
+	if resp == nil {
+		return nil
+	}
+	if resp.PromptFeedback != nil && resp.PromptFeedback.BlockReason != "" {
+		msg := strings.TrimSpace(resp.PromptFeedback.BlockReasonMessage)
+		if msg != "" {
+			return fmt.Errorf("gemini prompt blocked (%s): %s", resp.PromptFeedback.BlockReason, msg)
+		}
+		return fmt.Errorf("gemini prompt blocked (%s)", resp.PromptFeedback.BlockReason)
+	}
+	if len(resp.Candidates) == 0 {
+		return nil
 	}
 
-	var outBlocks []api.Block
-	hasToolUse := false
-	callSeq := 0
+	cand := resp.Candidates[0]
+	if cand == nil {
+		return nil
+	}
 
-	if resp != nil && len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
-		for _, part := range resp.Candidates[0].Content.Parts {
+	if cand.Content != nil {
+		for _, part := range cand.Content.Parts {
 			// Skip internal model reasoning parts so final assistant text stays clean.
 			if part == nil || part.Thought {
 				continue
 			}
 			if part.Text != "" {
-				outBlocks = append(outBlocks, api.Block{
-					Type: api.BlockText,
-					Text: part.Text,
-				})
+				textBuf.WriteString(part.Text)
+				if onChunk != nil {
+					onChunk(part.Text)
+				}
 			}
 			if part.FunctionCall != nil {
-				hasToolUse = true
-				callSeq++
+				*callSeq++
 				callID := part.FunctionCall.ID
 				if callID == "" {
 					// Synthesize a correlation ID when the model omits FunctionCall.ID.
-					callID = fmt.Sprintf("gemini_call_%d", callSeq)
+					callID = fmt.Sprintf("gemini_call_%d", *callSeq)
 				}
 
 				argsJSON := "{}"
 				if len(part.FunctionCall.Args) > 0 {
 					encoded, err := json.Marshal(part.FunctionCall.Args)
 					if err != nil {
-						return api.Response{}, fmt.Errorf("marshal gemini function args: %w", err)
+						return fmt.Errorf("marshal gemini function args: %w", err)
 					}
 					argsJSON = string(encoded)
 				}
 
-				outBlocks = append(outBlocks, api.Block{
-					Type:      api.BlockToolUse,
-					ToolUseID: callID,
-					ToolName:  part.FunctionCall.Name,
-					ToolInput: argsJSON,
+				*toolBlocks = append(*toolBlocks, api.Block{
+					Type:             api.BlockToolUse,
+					ToolUseID:        callID,
+					ToolName:         part.FunctionCall.Name,
+					ToolInput:        argsJSON,
+					ThoughtSignature: slices.Clone(part.ThoughtSignature),
 				})
 			}
 		}
 	}
 
+	switch cand.FinishReason {
+	case "", genai.FinishReasonUnspecified, genai.FinishReasonStop, genai.FinishReasonMaxTokens, genai.FinishReasonContinuation:
+		// Normal progress chunk or natural completion.
+	default:
+		msg := strings.TrimSpace(cand.FinishMessage)
+		if msg != "" {
+			return fmt.Errorf("gemini generation stopped (%s): %s", cand.FinishReason, msg)
+		}
+		return fmt.Errorf("gemini generation stopped (%s)", cand.FinishReason)
+	}
+
+	return nil
+}
+
+// buildGeminiResponse assembles consolidated text and tool-use blocks into domain api.Response.
+func buildGeminiResponse(text string, toolBlocks []api.Block) api.Response {
+	var outBlocks []api.Block
+	if text != "" {
+		outBlocks = append(outBlocks, api.Block{
+			Type: api.BlockText,
+			Text: text,
+		})
+	}
+	outBlocks = append(outBlocks, toolBlocks...)
+
 	stopReason := "end_turn"
-	if hasToolUse {
+	if len(toolBlocks) > 0 {
 		stopReason = "tool_use"
 	}
 
 	return api.Response{
 		Content:    outBlocks,
 		StopReason: stopReason,
-	}, nil
+	}
+}
+
+// Send fulfills the Provider interface by translating domain history and tool definitions
+// into Gemini GenerateContent calls and normalizing candidates back into api.Response.
+func (p *GeminiProvider) Send(ctx context.Context, messages []api.Message, tools []api.ToolDef) (api.Response, error) {
+	if err := p.validate(); err != nil {
+		return api.Response{}, err
+	}
+
+	resp, err := p.client.Models.GenerateContent(ctx, p.Model(), toGeminiContents(messages), p.buildParams(tools))
+	if err != nil {
+		return api.Response{}, fmt.Errorf("gemini generate content: %w", err)
+	}
+
+	var textBuf strings.Builder
+	var toolBlocks []api.Block
+	callSeq := 0
+	if err := collectGeminiParts(resp, &textBuf, &toolBlocks, &callSeq, nil); err != nil {
+		return api.Response{}, err
+	}
+
+	return buildGeminiResponse(textBuf.String(), toolBlocks), nil
+}
+
+// Stream implements provider.Streamer via Gemini's GenerateContentStream iterator.
+// It emits non-thought text deltas to onChunk in real time while assembling the full Response.
+func (p *GeminiProvider) Stream(ctx context.Context, messages []api.Message, tools []api.ToolDef, onChunk func(string)) (api.Response, error) {
+	if err := p.validate(); err != nil {
+		return api.Response{}, err
+	}
+
+	var textBuf strings.Builder
+	var toolBlocks []api.Block
+	callSeq := 0
+
+	for resp, err := range p.client.Models.GenerateContentStream(ctx, p.Model(), toGeminiContents(messages), p.buildParams(tools)) {
+		if err != nil {
+			return api.Response{}, fmt.Errorf("gemini generate content stream: %w", err)
+		}
+		if err := collectGeminiParts(resp, &textBuf, &toolBlocks, &callSeq, onChunk); err != nil {
+			return api.Response{}, err
+		}
+	}
+
+	return buildGeminiResponse(textBuf.String(), toolBlocks), nil
 }
 
 // toGeminiContents converts domain messages into Gemini SDK Contents using "user" and "model" roles.
@@ -163,6 +251,9 @@ func toGeminiContents(messages []api.Message) []*genai.Content {
 				part := genai.NewPartFromFunctionCall(b.ToolName, args)
 				if b.ToolUseID != "" && !strings.HasPrefix(b.ToolUseID, "gemini_call_") {
 					part.FunctionCall.ID = b.ToolUseID
+				}
+				if len(b.ThoughtSignature) > 0 {
+					part.ThoughtSignature = slices.Clone(b.ThoughtSignature)
 				}
 				parts = append(parts, part)
 			case api.BlockToolResult:
@@ -202,14 +293,21 @@ func toGeminiTools(tools []api.ToolDef) []*genai.Tool {
 
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
 	for _, t := range tools {
+		props := t.InputSchema
+		if props == nil {
+			props = map[string]any{}
+		}
+		schema := map[string]any{
+			"type":       "object",
+			"properties": props,
+		}
+		if len(t.Required) > 0 {
+			schema["required"] = t.Required
+		}
 		decls = append(decls, &genai.FunctionDeclaration{
-			Name:        t.Name,
-			Description: t.Description,
-			ParametersJsonSchema: map[string]any{
-				"type":       "object",
-				"properties": t.InputSchema,
-				"required":   t.Required,
-			},
+			Name:                 t.Name,
+			Description:          t.Description,
+			ParametersJsonSchema: schema,
 		})
 	}
 
@@ -258,9 +356,10 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// Compile-time assertions ensuring GeminiProvider satisfies Provider and ModelLister.
+// Compile-time assertions ensuring GeminiProvider satisfies Provider, ModelLister, and Streamer.
 var (
 	_ Provider    = (*GeminiProvider)(nil)
 	_ ModelLister = (*GeminiProvider)(nil)
+	_ Streamer    = (*GeminiProvider)(nil)
 )
 

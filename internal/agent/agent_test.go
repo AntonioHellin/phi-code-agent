@@ -704,3 +704,75 @@ func TestAgentLoop_PolicyDeny(t *testing.T) {
 		t.Errorf("expected 'Permission denied by policy', got %q", resultBlock.ToolResult)
 	}
 }
+
+type nonStreamingStubProvider struct {
+	reply string
+}
+
+func (s nonStreamingStubProvider) Send(_ context.Context, _ []api.Message, _ []api.ToolDef) (api.Response, error) {
+	return api.Response{
+		Content:    []api.Block{{Type: api.BlockText, Text: s.reply}},
+		StopReason: "end_turn",
+	}, nil
+}
+func (nonStreamingStubProvider) Model() string     { return "stub" }
+func (nonStreamingStubProvider) SetModel(_ string) {}
+
+// TestAgentLoop_Streaming verifies real-time chunk delivery for Streamer providers and graceful Send fallback otherwise.
+func TestAgentLoop_Streaming(t *testing.T) {
+	t.Run("delivers incremental chunks via OnChunk and stores assembled message", func(t *testing.T) {
+		mock := &provider.MockProvider{
+			StreamChunkSize: 5,
+			Responses: []api.Response{
+				{
+					Content:    []api.Block{{Type: api.BlockText, Text: "Streamed reply"}},
+					StopReason: "end_turn",
+				},
+			},
+		}
+
+		var streamed []string
+		a := New(Agent{
+			Name:     "stream-agent",
+			Provider: mock,
+			OnChunk: func(chunk string) {
+				streamed = append(streamed, chunk)
+			},
+			Verbose: false,
+		})
+
+		output, err := a.Run(context.Background(), "hello")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if output != "Streamed reply" {
+			t.Errorf("expected assembled output 'Streamed reply', got %q", output)
+		}
+		if strings.Join(streamed, "") != "Streamed reply\n" {
+			t.Errorf("expected chunks + newline 'Streamed reply\\n', got %q (%v)", strings.Join(streamed, ""), streamed)
+		}
+		if len(streamed) < 3 {
+			t.Errorf("expected multiple chunks plus newline, got %v", streamed)
+		}
+		if len(a.Messages()) != 2 || a.Messages()[1].Content[0].Text != "Streamed reply" {
+			t.Errorf("expected complete assistant message stored in history, got %+v", a.Messages())
+		}
+	})
+
+	t.Run("falls back seamlessly to Send when provider does not implement Streamer", func(t *testing.T) {
+		a := New(Agent{
+			Name:     "fallback-agent",
+			Provider: nonStreamingStubProvider{reply: "blocking fallback"},
+			OnChunk:  func(string) { t.Errorf("did not expect OnChunk for non-Streamer provider") },
+			Verbose:  false,
+		})
+
+		output, err := a.Run(context.Background(), "hello")
+		if err != nil {
+			t.Fatalf("unexpected fallback error: %v", err)
+		}
+		if output != "blocking fallback" {
+			t.Errorf("expected 'blocking fallback', got %q", output)
+		}
+	})
+}

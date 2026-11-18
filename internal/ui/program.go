@@ -3,9 +3,9 @@
 package ui
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -223,15 +223,13 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.termHeight = msg.Height
 		h.viewport.Width = msg.Width
 		h.syncViewportHeight()
+		h.syncViewportContent()
 		h.input.Width = msg.Width - 4
 
 	case AppendMsg:
-		// Append incoming stdout line to buffer and update scrollback viewport
+		// Append raw text to buffer and re-wrap uniformly to active viewport width
 		h.output.WriteString(string(msg))
-		h.viewport.SetContent(h.output.String())
-		if h.followBottom {
-			h.viewport.GotoBottom()
-		}
+		h.syncViewportContent()
 
 	case ApprovalRequest:
 		// Switch to approval state and cache prompt and reply channel
@@ -273,10 +271,7 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			errNotice := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(fmt.Sprintf("\n[error: %v]\n", msg.err))
 			h.output.WriteString(errNotice)
-			h.viewport.SetContent(h.output.String())
-			if h.followBottom {
-				h.viewport.GotoBottom()
-			}
+			h.syncViewportContent()
 		}
 
 	case spinner.TickMsg:
@@ -332,10 +327,12 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.approvalReply <- true
 				h.approvalReply = nil
 				h.state = stateRunning
+				return h, h.spinner.Tick
 			case "n", "N", "esc":
 				h.approvalReply <- false
 				h.approvalReply = nil
 				h.state = stateRunning
+				return h, h.spinner.Tick
 			}
 
 		case stateSelectingModel:
@@ -355,8 +352,10 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				chosen := h.selectOptions[h.selectCursor]
 				h.finishSelection(SelectResult{Selected: chosen})
+				return h, h.spinner.Tick
 			case "esc", "ctrl+c", "q":
 				h.finishSelection(SelectResult{Canceled: true})
+				return h, h.spinner.Tick
 			}
 
 		case stateRunning:
@@ -393,9 +392,8 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.output.WriteString("> ")
 				h.output.WriteString(val)
 				h.output.WriteString("\n")
-				h.viewport.SetContent(h.output.String())
 				h.followBottom = true
-				h.viewport.GotoBottom()
+				h.syncViewportContent()
 
 				// Transition state and dispatch agent runner in background goroutine
 				h.state = stateRunning
@@ -445,6 +443,19 @@ func (h *harness) syncViewportHeight() {
 	}
 }
 
+// syncViewportContent wraps the raw output buffer to the active viewport width so
+// long errors, prompts, logs, and streamed lines wrap cleanly instead of clipping horizontally.
+func (h *harness) syncViewportContent() {
+	content := h.output.String()
+	if h.viewport.Width > 0 && content != "" {
+		content = lipgloss.NewStyle().Width(h.viewport.Width).Render(content)
+	}
+	h.viewport.SetContent(content)
+	if h.followBottom {
+		h.viewport.GotoBottom()
+	}
+}
+
 func (h *harness) renderBannerAtStep(step int) {
 	banner := RenderBanner(h.modelName, step)
 	history := ""
@@ -455,7 +466,7 @@ func (h *harness) renderBannerAtStep(step int) {
 	h.output.WriteString(banner)
 	h.bannerLen = len(banner)
 	h.output.WriteString(history)
-	h.viewport.SetContent(h.output.String())
+	h.syncViewportContent()
 }
 
 func (h *harness) scrollViewportUp(lines int) {
@@ -567,16 +578,20 @@ func NewProgram(runner AgentRunner, model string) (*Program, error) {
 		tea.WithMouseCellMotion(),
 	)
 
-	// Background goroutine scanning the pipe and feeding lines into the TUI event loop
+	// Background goroutine streaming raw stdout pipe chunks into the TUI without newline buffering.
 	go func() {
-		scanner := bufio.NewScanner(r)
-		buf := make([]byte, 64*1024)
-		scanner.Buffer(buf, 10*1024*1024)
-		for scanner.Scan() {
-			p.Send(AppendMsg(scanner.Text() + "\n"))
-		}
-		if err := scanner.Err(); err != nil {
-			p.Send(AppendMsg(fmt.Sprintf("[error reading stdout pipe: %v]\n", err)))
+		buf := make([]byte, 4096)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				p.Send(AppendMsg(string(buf[:n])))
+			}
+			if err != nil {
+				if err != io.EOF {
+					p.Send(AppendMsg(fmt.Sprintf("[error reading stdout pipe: %v]\n", err)))
+				}
+				break
+			}
 		}
 	}()
 
@@ -586,6 +601,14 @@ func NewProgram(runner AgentRunner, model string) (*Program, error) {
 		pipeReader:     r,
 		pipeWriter:     w,
 	}, nil
+}
+
+// Append injects streamed text deltas directly into the viewport without waiting for newlines.
+func (p *Program) Append(chunk string) {
+	if p == nil || p.teaProgram == nil || chunk == "" {
+		return
+	}
+	p.teaProgram.Send(AppendMsg(chunk))
 }
 
 // Confirm satisfies the agent's interactive confirmation contract (rootAgent.Confirm).

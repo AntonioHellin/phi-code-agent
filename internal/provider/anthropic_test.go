@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -222,6 +224,198 @@ func TestAnthropicProvider_ListModels_WithHTTPTest(t *testing.T) {
 
 	if len(models) != 2 || models[0] != "claude-sonnet-5-5" || models[1] != "claude-haiku-5-5" {
 		t.Fatalf("expected [claude-sonnet-5-5 claude-haiku-5-5], got %v", models)
+	}
+}
+
+// TestAnthropicProvider_Stream_WithHTTPTest verifies SSE streaming over /v1/messages:
+// it asserts "stream": true on the outbound JSON request, real-time TextDelta callback delivery,
+// input_json_delta tool argument accumulation without leaking fragments to onChunk,
+// nil-callback safety, and HTTP error propagation.
+func TestAnthropicProvider_Stream_WithHTTPTest(t *testing.T) {
+	var nilProv *AnthropicProvider
+	if _, err := nilProv.Stream(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected nil provider error, got %v", err)
+	}
+	if _, err := NewAnthropicProvider(nil, "claude-haiku-5-5", 100, "").Stream(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "client is nil") {
+		t.Fatalf("expected nil client error, got %v", err)
+	}
+
+	ssePayload := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-haiku-5-5","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Quick"}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" sort"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_1","name":"bash","input":{}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":"}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"pwd\"}"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":1}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":20}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+		``,
+	}, "\n")
+
+	var failNext bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		rawBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		var req struct {
+			Stream bool   `json:"stream"`
+			Model  string `json:"model"`
+		}
+		if err := json.Unmarshal(rawBody, &req); err != nil {
+			t.Fatalf("failed decoding request JSON: %v", err)
+		}
+		if !req.Stream {
+			t.Fatalf("expected request JSON to include stream=true, got %s", string(rawBody))
+		}
+
+		if failNext {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"overloaded"}}`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(ssePayload))
+	}))
+	defer srv.Close()
+
+	client := anthropic.NewClient(
+		option.WithAPIKey("test-anthropic-key"),
+		option.WithBaseURL(srv.URL),
+		option.WithMaxRetries(0),
+	)
+	prov := NewAnthropicProvider(&client, string(anthropic.ModelClaudeHaiku5_5), 4096, "system")
+
+	var chunks []string
+	resp, err := prov.Stream(
+		context.Background(),
+		[]api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}},
+		nil,
+		func(chunk string) {
+			chunks = append(chunks, chunk)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected Stream error: %v", err)
+	}
+
+	if len(chunks) != 2 || chunks[0] != "Quick" || chunks[1] != " sort" {
+		t.Fatalf("expected chunks [Quick  sort], got %#v", chunks)
+	}
+	if resp.StopReason != "tool_use" {
+		t.Errorf("expected StopReason 'tool_use', got %q", resp.StopReason)
+	}
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 accumulated blocks (text + tool_use), got %+v", resp.Content)
+	}
+	if resp.Content[0].Type != api.BlockText || resp.Content[0].Text != "Quick sort" {
+		t.Errorf("unexpected text block: %+v", resp.Content[0])
+	}
+	toolBlock := resp.Content[1]
+	if toolBlock.Type != api.BlockToolUse || toolBlock.ToolUseID != "call_1" || toolBlock.ToolName != "bash" || toolBlock.ToolInput != `{"command":"pwd"}` {
+		t.Errorf("unexpected accumulated tool_use block: %+v", toolBlock)
+	}
+
+	// Nil onChunk callback must succeed safely without panicking.
+	nilSinkResp, err := prov.Stream(
+		context.Background(),
+		[]api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected nil-callback Stream error: %v", err)
+	}
+	if len(nilSinkResp.Content) != 2 || nilSinkResp.Content[0].Text != "Quick sort" {
+		t.Errorf("unexpected response with nil callback: %+v", nilSinkResp)
+	}
+
+	// Server error must be surfaced, not swallowed as nil.
+	failNext = true
+	if _, err := prov.Stream(context.Background(), []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil, nil); err == nil {
+		t.Fatalf("expected Stream to propagate HTTP 500 error")
+	}
+}
+
+// TestAnthropicProvider_OmitsEmptySystem verifies buildParams omits blank System prompts
+// (which Anthropic's live Messages API rejects) while preserving non-empty instructions.
+func TestAnthropicProvider_OmitsEmptySystem(t *testing.T) {
+	var capturedPayloads []map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed reading request body: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(rawBody, &payload); err != nil {
+			t.Fatalf("failed decoding JSON payload: %v", err)
+		}
+		capturedPayloads = append(capturedPayloads, payload)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_sys",
+			"type": "message",
+			"role": "assistant",
+			"content": [{"type": "text", "text": "ok"}],
+			"model": "claude-haiku-5-5",
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 5, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := anthropic.NewClient(
+		option.WithAPIKey("test-anthropic-key"),
+		option.WithBaseURL(srv.URL),
+		option.WithMaxRetries(0),
+	)
+
+	emptySysProv := NewAnthropicProvider(&client, string(anthropic.ModelClaudeHaiku5_5), 1024, "   ")
+	if _, err := emptySysProv.Send(context.Background(), []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil); err != nil {
+		t.Fatalf("unexpected error with blank system prompt: %v", err)
+	}
+	if _, hasSystem := capturedPayloads[0]["system"]; hasSystem {
+		t.Errorf("expected 'system' key omitted when system prompt is blank, got %v", capturedPayloads[0])
+	}
+
+	withSysProv := NewAnthropicProvider(&client, string(anthropic.ModelClaudeHaiku5_5), 1024, "Be concise.")
+	if _, err := withSysProv.Send(context.Background(), []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil); err != nil {
+		t.Fatalf("unexpected error with system prompt: %v", err)
+	}
+	if _, hasSystem := capturedPayloads[1]["system"]; !hasSystem {
+		t.Errorf("expected 'system' key present when system prompt is set, got %v", capturedPayloads[1])
 	}
 }
 

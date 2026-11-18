@@ -27,6 +27,7 @@ type Agent struct {
 	MaxTurns  int                        // Maximum allowed conversation turns to prevent infinite loops
 	Verbose   bool                       // When true, displays spinner and streams assistant text to terminal
 	LogPrefix string                     // CLI log prefix displayed before tool execution notices
+	OnChunk   func(chunk string)         // Optional real-time text delta sink invoked during streaming inference
 	Confirm   func(prompt string) bool   // Optional permission gate hook for sensitive operations
 	Policy    permission.Policy
 	messages  []api.Message // Private conversational memory for this agent instance
@@ -82,6 +83,13 @@ func (agentInstance *Agent) Run(ctx context.Context, prompt string) (string, err
 		agentInstance.messages = compactedMessages
 	}
 
+	chunkSink := agentInstance.OnChunk
+	if chunkSink == nil && agentInstance.Verbose {
+		chunkSink = func(chunk string) {
+			fmt.Print(chunk)
+		}
+	}
+
 	turnCount := 0
 	for {
 		turnCount++
@@ -89,7 +97,25 @@ func (agentInstance *Agent) Run(ctx context.Context, prompt string) (string, err
 			return "", fmt.Errorf("agent '%s' reached maximum turn limit (%d)", agentInstance.Name, agentInstance.MaxTurns)
 		}
 
-		providerResponse, err := agentInstance.Provider.Send(ctx, agentInstance.messages, agentInstance.Tools.Definitions())
+		// Stream deltas only when a live chunk sink is configured; suppress duplicate Println below if streamed.
+		var (
+			providerResponse api.Response
+			err              error
+			streamedText     bool
+		)
+		if streamer, ok := agentInstance.Provider.(provider.Streamer); ok && chunkSink != nil {
+			providerResponse, err = streamer.Stream(ctx, agentInstance.messages, agentInstance.Tools.Definitions(), func(chunk string) {
+				if chunk != "" {
+					streamedText = true
+					chunkSink(chunk)
+				}
+			})
+			if streamedText {
+				chunkSink("\n")
+			}
+		} else {
+			providerResponse, err = agentInstance.Provider.Send(ctx, agentInstance.messages, agentInstance.Tools.Definitions())
+		}
 		if err != nil {
 			return "", fmt.Errorf("provider error: %w", err)
 		}
@@ -104,7 +130,7 @@ func (agentInstance *Agent) Run(ctx context.Context, prompt string) (string, err
 		for _, contentBlock := range providerResponse.Content {
 			switch contentBlock.Type {
 			case api.BlockText:
-				if agentInstance.Verbose {
+				if !streamedText && agentInstance.Verbose {
 					fmt.Println(contentBlock.Text)
 				}
 			case api.BlockToolUse:
@@ -151,8 +177,8 @@ func (agentInstance *Agent) executeTool(ctx context.Context, toolName, rawArgume
 		// Auto-approved
 	}
 
-	// Provide progress logging for subagents
-	if agentInstance.Name != "" && agentInstance.Name != "root" {
+	// Provide progress logging for subagents and verbose root sessions so tool turns stay observable.
+	if (agentInstance.Name != "" && agentInstance.Name != "root") || agentInstance.Verbose {
 		agentInstance.logToolCall(toolName, rawArguments)
 	}
 
