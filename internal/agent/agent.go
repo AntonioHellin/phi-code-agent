@@ -31,6 +31,7 @@ type Agent struct {
 	Confirm   func(prompt string) bool   // Optional permission gate hook for sensitive operations
 	Policy    permission.Policy
 	messages  []api.Message // Private conversational memory for this agent instance
+	usage     api.Usage     // Cumulative token accounting across all turns in this session
 }
 
 // New constructs an Agent instance with defensive defaults applied.
@@ -63,8 +64,25 @@ func (agentInstance *Agent) Messages() []api.Message {
 }
 
 // Clear resets the conversational memory slice without deallocating backing capacity.
+// Session token usage remains preserved because those tokens were already consumed.
 func (agentInstance *Agent) Clear() {
 	agentInstance.messages = agentInstance.messages[:0]
+}
+
+// Usage returns the cumulative token counts consumed by this agent (including any rolled-up subagents).
+func (agentInstance *Agent) Usage() api.Usage {
+	if agentInstance == nil {
+		return api.Usage{}
+	}
+	return agentInstance.usage
+}
+
+// RecordUsage merges externally tracked token usage (e.g. from a delegated subagent) into this agent.
+func (agentInstance *Agent) RecordUsage(usage api.Usage) {
+	if agentInstance == nil {
+		return
+	}
+	agentInstance.usage.Add(usage)
 }
 
 // Run executes an autonomous ReAct loop starting from a single user prompt.
@@ -119,6 +137,8 @@ func (agentInstance *Agent) Run(ctx context.Context, prompt string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("provider error: %w", err)
 		}
+
+		agentInstance.usage.Add(providerResponse.Usage)
 
 		// Record assistant model turn into history
 		agentInstance.messages = append(agentInstance.messages, api.Message{

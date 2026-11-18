@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"phi-agent-code/internal/agent"
 	"phi-agent-code/internal/api"
+	"phi-agent-code/internal/compact"
 	"phi-agent-code/internal/provider"
 )
 
@@ -39,15 +41,21 @@ func captureCommandStdout(t *testing.T, fn func()) string {
 func setupCommandGlobals(t *testing.T, p provider.Provider) {
 	t.Helper()
 	origProv := prov
+	origAgent := rootAgent
+	origCompactor := compactor
 	origSelect := selectModel
 	origOnSet := onModelSet
 
 	prov = p
+	rootAgent = nil
+	compactor = compact.NoCompaction{}
 	selectModel = nil
 	onModelSet = nil
 
 	t.Cleanup(func() {
 		prov = origProv
+		rootAgent = origAgent
+		compactor = origCompactor
 		selectModel = origSelect
 		onModelSet = origOnSet
 	})
@@ -238,6 +246,92 @@ func TestCmdModelsInteractiveAndFallback(t *testing.T) {
 		})
 		if !strings.Contains(out, "available models (3):") || !strings.Contains(out, "m3") {
 			t.Errorf("expected fallback list output, got %q", out)
+		}
+	})
+}
+
+func TestFormatIntWithCommas(t *testing.T) {
+	cases := []struct {
+		in   int
+		want string
+	}{
+		{0, "0"},
+		{820, "820"},
+		{12450, "12,450"},
+		{1000000, "1,000,000"},
+		{-1234, "-1,234"},
+	}
+	for _, tc := range cases {
+		if got := formatIntWithCommas(tc.in); got != tc.want {
+			t.Errorf("formatIntWithCommas(%d) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCmdTokens(t *testing.T) {
+	t.Run("displays formatted token breakdown, budget, and EUR cost for known model", func(t *testing.T) {
+		mock := &provider.MockProvider{
+			Responses: []api.Response{
+				{
+					Content:    []api.Block{{Type: api.BlockText, Text: "ok"}},
+					StopReason: "end_turn",
+					Usage:      api.Usage{InputTokens: 12450, OutputTokens: 820, CacheReadTokens: 8100},
+				},
+			},
+		}
+		mock.SetModel("claude-sonnet-4-5-20250929")
+		setupCommandGlobals(t, mock)
+
+		compactor = &compact.WithLogging{
+			Inner:   &compact.TokenBudget{MaxTokens: 40000},
+			LogPath: "",
+		}
+		rootAgent = agent.New(agent.Agent{
+			Name:      "root",
+			Provider:  mock,
+			Compactor: compactor,
+			Verbose:   false,
+		})
+		if _, err := rootAgent.Run(context.Background(), "hello"); err != nil {
+			t.Fatalf("unexpected Run error: %v", err)
+		}
+
+		out := captureCommandStdout(t, func() {
+			cmdTokens("")
+		})
+		for _, want := range []string{
+			"Session Token Usage:",
+			"12,450",
+			"820",
+			"8,100",
+			"21,370",
+			"40,000 tokens",
+			"€0.0479 EUR (claude-sonnet-4-5-20250929)",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("expected /tokens output to contain %q, got:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("handles unknown rate and nil globals safely", func(t *testing.T) {
+		mock := &provider.MockProvider{}
+		mock.SetModel("custom-unknown-model")
+		setupCommandGlobals(t, mock)
+
+		out := captureCommandStdout(t, func() {
+			cmdTokens("")
+		})
+		if !strings.Contains(out, `unknown rate for "custom-unknown-model"`) {
+			t.Errorf("expected unknown rate notice, got:\n%s", out)
+		}
+
+		prov = nil
+		nilOut := captureCommandStdout(t, func() {
+			cmdTokens("")
+		})
+		if !strings.Contains(nilOut, "Session Token Usage:") {
+			t.Errorf("expected safe zeroed output when globals are nil, got:\n%s", nilOut)
 		}
 	})
 }

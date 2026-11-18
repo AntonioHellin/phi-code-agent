@@ -74,3 +74,19 @@ type Usage struct {
 	CacheCreationTokens int
 	CacheReadTokens     int
 }
+
+// Add accumulates per-turn token counts into this Usage summary safely.
+func (u *Usage) Add(other Usage) {
+	if u == nil {
+		return
+	}
+	u.InputTokens += other.InputTokens
+	u.OutputTokens += other.OutputTokens
+	u.CacheCreationTokens += other.CacheCreationTokens
+	u.CacheReadTokens += other.CacheReadTokens
+}
+
+// Total returns the combined token count across input, cache creation, cache read, and output.
+func (u Usage) Total() int {
+	return u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens + u.OutputTokens
+}
