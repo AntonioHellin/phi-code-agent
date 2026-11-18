@@ -74,7 +74,9 @@ func TestOllamaProvider_SendTextAndWireFormat(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"message": {"role": "assistant", "content": "Hello from local Ollama"},
 			"done": true,
-			"done_reason": "stop"
+			"done_reason": "stop",
+			"prompt_eval_count": 42,
+			"eval_count": 17
 		}`))
 	}))
 	defer srv.Close()
@@ -88,6 +90,9 @@ func TestOllamaProvider_SendTextAndWireFormat(t *testing.T) {
 	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Usage.InputTokens != 42 || resp.Usage.OutputTokens != 17 {
+		t.Errorf("expected Ollama Send usage {in:42 out:17}, got %+v", resp.Usage)
 	}
 
 	if capturedMethod != http.MethodPost {
@@ -451,7 +456,7 @@ func TestOllamaProvider_Stream_WithHTTPTest(t *testing.T) {
 		ndjson := strings.Join([]string{
 			`{"message":{"role":"assistant","content":"Local "},"done":false}`,
 			`{"message":{"role":"assistant","content":"stream"},"done":false}`,
-			`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"go.mod"}}}]},"done":true,"done_reason":"stop"}`,
+			`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"go.mod"}}}]},"done":true,"done_reason":"stop","prompt_eval_count":120,"eval_count":35}`,
 			``,
 		}, "\n")
 
@@ -503,6 +508,9 @@ func TestOllamaProvider_Stream_WithHTTPTest(t *testing.T) {
 		toolBlock := resp.Content[1]
 		if toolBlock.Type != api.BlockToolUse || toolBlock.ToolUseID != "ollama_call_1" || toolBlock.ToolName != "read_file" || toolBlock.ToolInput != `{"path":"go.mod"}` {
 			t.Errorf("unexpected tool_use block: %+v", toolBlock)
+		}
+		if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 35 {
+			t.Errorf("expected Ollama Stream usage {in:120 out:35}, got %+v", resp.Usage)
 		}
 
 		// Nil callback safety

@@ -670,5 +670,58 @@ func TestGeminiProvider_ExhaustiveEdgeCases(t *testing.T) {
 			t.Fatalf("expected context.Canceled on aborted Stream, got %v", err)
 		}
 	})
+
+	t.Run("extracts Send and Stream UsageMetadata overwriting running totals even on trailing usage-only chunks", func(t *testing.T) {
+		streamPayload := strings.Join([]string{
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"One "}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":4}}`,
+			``,
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"two"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":9}}`,
+			``,
+			`data: {"usageMetadata":{"promptTokenCount":100,"toolUsePromptTokenCount":25,"cachedContentTokenCount":40,"candidatesTokenCount":9,"thoughtsTokenCount":30}}`,
+			``,
+			``,
+		}, "\n")
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, ":streamGenerateContent") {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(streamPayload))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			// Send case also exercises negative uncached clamp when cachedContentTokenCount > promptTokenCount.
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":20,"candidatesTokenCount":3,"thoughtsTokenCount":7}}`))
+		}))
+		defer srv.Close()
+
+		ctx := context.Background()
+		client, err := genai.NewClient(ctx, &genai.ClientConfig{
+			APIKey:      "test-key",
+			Backend:     genai.BackendGeminiAPI,
+			HTTPClient:  srv.Client(),
+			HTTPOptions: genai.HTTPOptions{BaseURL: srv.URL},
+		})
+		if err != nil {
+			t.Fatalf("failed creating genai client: %v", err)
+		}
+		prov := NewGeminiProvider(client, "gemini-2.5-flash", 0, "")
+
+		streamResp, err := prov.Stream(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "count"}}}}, nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected Stream error: %v", err)
+		}
+		// Uncached InputTokens = 100 + 25 - 40 = 85; OutputTokens = 9 + 30 = 39; CacheReadTokens = 40.
+		if streamResp.Usage.InputTokens != 85 || streamResp.Usage.OutputTokens != 39 || streamResp.Usage.CacheReadTokens != 40 {
+			t.Errorf("expected overwritten trailing usage {in:85 out:39 cacheRead:40}, got %+v", streamResp.Usage)
+		}
+
+		sendResp, err := prov.Send(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "clamp"}}}}, nil)
+		if err != nil {
+			t.Fatalf("unexpected Send error: %v", err)
+		}
+		if sendResp.Usage.InputTokens != 0 || sendResp.Usage.OutputTokens != 10 || sendResp.Usage.CacheReadTokens != 20 {
+			t.Errorf("expected clamped input=0 out=10 cacheRead=20, got %+v", sendResp.Usage)
+		}
+	})
 }
 

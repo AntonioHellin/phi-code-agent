@@ -78,9 +78,9 @@ func (p *GeminiProvider) buildParams(tools []api.ToolDef) *genai.GenerateContent
 	return cfg
 }
 
-// collectGeminiParts extracts non-thought text and FunctionCall parts from one SDK response chunk,
-// optionally forwarding text deltas to onChunk while accumulating full domain blocks and surfacing blocks/errors.
-func collectGeminiParts(resp *genai.GenerateContentResponse, textBuf *strings.Builder, toolBlocks *[]api.Block, callSeq *int, onChunk func(string)) error {
+// collectGeminiParts extracts non-thought text, FunctionCall parts, and normalized UsageMetadata from one SDK chunk.
+// It forwards text deltas to onChunk while accumulating full domain blocks and surfacing blocks/errors.
+func collectGeminiParts(resp *genai.GenerateContentResponse, textBuf *strings.Builder, toolBlocks *[]api.Block, callSeq *int, usage *api.Usage, onChunk func(string)) error {
 	if resp == nil {
 		return nil
 	}
@@ -90,6 +90,20 @@ func collectGeminiParts(resp *genai.GenerateContentResponse, textBuf *strings.Bu
 			return fmt.Errorf("gemini prompt blocked (%s): %s", resp.PromptFeedback.BlockReason, msg)
 		}
 		return fmt.Errorf("gemini prompt blocked (%s)", resp.PromptFeedback.BlockReason)
+	}
+	// Overwrite (never add) before the Candidates check: streams emit cumulative request totals
+	// and may deliver final UsageMetadata on a trailing chunk with no Candidates.
+	if usage != nil && resp.UsageMetadata != nil {
+		inputTokens := int(resp.UsageMetadata.PromptTokenCount) + int(resp.UsageMetadata.ToolUsePromptTokenCount) - int(resp.UsageMetadata.CachedContentTokenCount)
+		if inputTokens < 0 {
+			inputTokens = 0
+		}
+		*usage = api.Usage{
+			InputTokens: inputTokens,
+			// Gemini bills reasoning ThoughtsTokenCount separately from visible CandidatesTokenCount.
+			OutputTokens:    int(resp.UsageMetadata.CandidatesTokenCount) + int(resp.UsageMetadata.ThoughtsTokenCount),
+			CacheReadTokens: int(resp.UsageMetadata.CachedContentTokenCount),
+		}
 	}
 	if len(resp.Candidates) == 0 {
 		return nil
@@ -155,7 +169,7 @@ func collectGeminiParts(resp *genai.GenerateContentResponse, textBuf *strings.Bu
 }
 
 // buildGeminiResponse assembles consolidated text and tool-use blocks into domain api.Response.
-func buildGeminiResponse(text string, toolBlocks []api.Block) api.Response {
+func buildGeminiResponse(text string, toolBlocks []api.Block, usage api.Usage) api.Response {
 	var outBlocks []api.Block
 	if text != "" {
 		outBlocks = append(outBlocks, api.Block{
@@ -173,6 +187,7 @@ func buildGeminiResponse(text string, toolBlocks []api.Block) api.Response {
 	return api.Response{
 		Content:    outBlocks,
 		StopReason: stopReason,
+		Usage:      usage,
 	}
 }
 
@@ -190,12 +205,13 @@ func (p *GeminiProvider) Send(ctx context.Context, messages []api.Message, tools
 
 	var textBuf strings.Builder
 	var toolBlocks []api.Block
+	var usage api.Usage
 	callSeq := 0
-	if err := collectGeminiParts(resp, &textBuf, &toolBlocks, &callSeq, nil); err != nil {
+	if err := collectGeminiParts(resp, &textBuf, &toolBlocks, &callSeq, &usage, nil); err != nil {
 		return api.Response{}, err
 	}
 
-	return buildGeminiResponse(textBuf.String(), toolBlocks), nil
+	return buildGeminiResponse(textBuf.String(), toolBlocks, usage), nil
 }
 
 // Stream implements provider.Streamer via Gemini's GenerateContentStream iterator.
@@ -207,18 +223,19 @@ func (p *GeminiProvider) Stream(ctx context.Context, messages []api.Message, too
 
 	var textBuf strings.Builder
 	var toolBlocks []api.Block
+	var usage api.Usage
 	callSeq := 0
 
 	for resp, err := range p.client.Models.GenerateContentStream(ctx, p.Model(), toGeminiContents(messages), p.buildParams(tools)) {
 		if err != nil {
 			return api.Response{}, fmt.Errorf("gemini generate content stream: %w", err)
 		}
-		if err := collectGeminiParts(resp, &textBuf, &toolBlocks, &callSeq, onChunk); err != nil {
+		if err := collectGeminiParts(resp, &textBuf, &toolBlocks, &callSeq, &usage, onChunk); err != nil {
 			return api.Response{}, err
 		}
 	}
 
-	return buildGeminiResponse(textBuf.String(), toolBlocks), nil
+	return buildGeminiResponse(textBuf.String(), toolBlocks, usage), nil
 }
 
 // toGeminiContents converts domain messages into Gemini SDK Contents using "user" and "model" roles.
@@ -362,4 +379,3 @@ var (
 	_ ModelLister = (*GeminiProvider)(nil)
 	_ Streamer    = (*GeminiProvider)(nil)
 )
-

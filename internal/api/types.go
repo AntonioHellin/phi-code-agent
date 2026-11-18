@@ -62,5 +62,15 @@ type ToolDef struct {
 type Response struct {
 	Content    []Block
 	StopReason string
+	Usage      Usage
 }
 
+// Usage normalizes per-turn token accounting across LLM providers.
+// InputTokens counts uncached input tokens only (excluding CacheCreationTokens and CacheReadTokens),
+// and OutputTokens reflects total billed generation tokens including reasoning/thinking output.
+type Usage struct {
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int
+	CacheReadTokens     int
+}

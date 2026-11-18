@@ -54,12 +54,33 @@ func (m *MockProvider) Send(ctx context.Context, messages []api.Message, _ []api
 		return resp, nil
 	}
 
-	// Keep counting calls and return a safe offline fallback so interactive --provider mock runs stay alive.
+	// Keep counting calls and return a safe offline fallback with synthetic usage so --provider mock
+	// exercises both streaming and /tokens cost tracking cleanly offline.
 	m.CallIndex++
+	const defaultReply = "mock default response"
 	return api.Response{
-		Content:    []api.Block{{Type: api.BlockText, Text: "mock default response"}},
+		Content:    []api.Block{{Type: api.BlockText, Text: defaultReply}},
 		StopReason: "end_turn",
+		Usage: api.Usage{
+			InputTokens:  estimateMockInputTokens(messages),
+			OutputTokens: max(1, len(defaultReply)/4),
+		},
 	}, nil
+}
+
+// estimateMockInputTokens computes a deterministic character/4 heuristic for offline --provider mock runs.
+func estimateMockInputTokens(messages []api.Message) int {
+	chars := 0
+	for _, msg := range messages {
+		for _, b := range msg.Content {
+			chars += len(b.Text) + len(b.ToolName) + len(b.ToolInput) + len(b.ToolResult)
+		}
+	}
+	tokens := (chars + 3) / 4
+	if tokens < 1 {
+		return 1
+	}
+	return tokens
 }
 
 // SetModel updates the active model name reported by Model.
