@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	"phi-agent-code/internal/api"
 )
@@ -15,6 +16,8 @@ type MockProvider struct {
 	CallIndex       int             // Cursor tracking the next response to return
 	History         [][]api.Message // Immutable per-turn snapshots of incoming message slices
 	AvailableModels []string        // Optional deterministic catalog returned by ListModels
+	StreamChunkSize int             // Rune count per streamed chunk in Stream; defaults to 4 when <= 0
+	StreamDelay     time.Duration   // Optional per-chunk delay for interactive streaming demos
 	model           string          // Active model name reported by Model(); defaults to "mock" when empty
 }
 
@@ -83,8 +86,51 @@ func (m *MockProvider) ListModels(ctx context.Context) ([]string, error) {
 	return []string{m.Model()}, nil
 }
 
-// Compile-time assertions ensuring MockProvider satisfies Provider and ModelLister.
+// Stream implements provider.Streamer for offline tests and --provider mock demos.
+// It reuses Send to resolve the turn and emits text blocks as UTF-8 rune chunks via onChunk.
+func (m *MockProvider) Stream(ctx context.Context, messages []api.Message, tools []api.ToolDef, onChunk func(chunk string)) (api.Response, error) {
+	resp, err := m.Send(ctx, messages, tools)
+	if err != nil {
+		return api.Response{}, err
+	}
+	if onChunk == nil {
+		return resp, nil
+	}
+
+	chunkSize := m.StreamChunkSize
+	if chunkSize <= 0 {
+		chunkSize = 4
+	}
+
+	for _, block := range resp.Content {
+		if block.Type != api.BlockText || block.Text == "" {
+			continue
+		}
+		runes := []rune(block.Text)
+		for i := 0; i < len(runes); i += chunkSize {
+			if m.StreamDelay > 0 && ctx != nil {
+				select {
+				case <-ctx.Done():
+					return api.Response{}, ctx.Err()
+				case <-time.After(m.StreamDelay):
+				}
+			} else if m.StreamDelay > 0 {
+				time.Sleep(m.StreamDelay)
+			}
+			end := i + chunkSize
+			if end > len(runes) {
+				end = len(runes)
+			}
+			onChunk(string(runes[i:end]))
+		}
+	}
+
+	return resp, nil
+}
+
+// Compile-time assertions ensuring MockProvider satisfies Provider, ModelLister, and Streamer.
 var (
 	_ Provider    = (*MockProvider)(nil)
 	_ ModelLister = (*MockProvider)(nil)
+	_ Streamer    = (*MockProvider)(nil)
 )

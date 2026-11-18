@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"google.golang.org/genai"
@@ -85,6 +86,8 @@ func buildProvider(name, modelOverride, system string) (provider.Provider, error
 	case "mock":
 		mock := &provider.MockProvider{
 			AvailableModels: []string{"mock", "mock-fast", "mock-reasoning"},
+			StreamChunkSize: 4,
+			StreamDelay:     15 * time.Millisecond,
 		}
 		if model != "" {
 			mock.SetModel(model)
@@ -174,6 +177,7 @@ func main() {
 
 	// Connect interactive UI hooks and start the Bubble Tea event loop
 	rootAgent.Confirm = app.Confirm
+	rootAgent.OnChunk = app.Append
 	selectModel = app.SelectModel
 	onModelSet = app.SetModel
 	if err := app.Run(); err != nil {

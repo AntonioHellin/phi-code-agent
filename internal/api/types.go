@@ -14,13 +14,14 @@ const (
 // Block represents a single discrete payload within a message (text, tool invocation, or tool output).
 // It uses a tagged struct pattern to remain vendor-agnostic and avoid vendor SDK union types in domain logic.
 type Block struct {
-	Type       BlockType
-	Text       string // Populated for BlockText
-	ToolUseID  string // Populated for BlockToolUse and BlockToolResult
-	ToolName   string // Populated for BlockToolUse
-	ToolInput  string // Populated for BlockToolUse (raw JSON arguments string)
-	ToolResult string // Populated for BlockToolResult (raw output string)
-	IsError    bool   // Populated for BlockToolResult (indicates execution failure)
+	Type             BlockType
+	Text             string // Populated for BlockText
+	ToolUseID        string // Populated for BlockToolUse and BlockToolResult
+	ToolName         string // Populated for BlockToolUse
+	ToolInput        string // Populated for BlockToolUse (raw JSON arguments string)
+	ThoughtSignature []byte // Optional opaque reasoning signature preserved across tool turns
+	ToolResult       string // Populated for BlockToolResult (raw output string)
+	IsError          bool   // Populated for BlockToolResult (indicates execution failure)
 }
 
 // Role identifies the sender of a conversation turn.

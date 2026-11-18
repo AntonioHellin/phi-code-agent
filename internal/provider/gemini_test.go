@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -401,5 +403,272 @@ func TestGeminiProvider_ListModels_WithHTTPTest(t *testing.T) {
 	if len(models) != 2 || models[0] != "gemini-4-hydrogen" || models[1] != "gemini-3.8-flash" {
 		t.Fatalf("expected [gemini-4-hydrogen gemini-3.8-flash], got %v", models)
 	}
+}
+
+// TestGeminiProvider_Stream_WithHTTPTest verifies SSE streaming via GenerateContentStream:
+// it checks /v1beta/models/...:streamGenerateContent routing, skips Thought parts, emits text deltas
+// to onChunk in order, consolidates text + FunctionCall blocks, tolerates nil onChunk,
+// and guards against nil providers, nil clients, empty models, and HTTP errors.
+func TestGeminiProvider_Stream_WithHTTPTest(t *testing.T) {
+	var nilProv *GeminiProvider
+	if _, err := nilProv.Stream(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected nil provider error, got %v", err)
+	}
+	if _, err := NewGeminiProvider(nil, "gemini-2.5-flash", 0, "").Stream(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "client is nil") {
+		t.Fatalf("expected nil client error, got %v", err)
+	}
+	clientDummy, err := genai.NewClient(context.Background(), &genai.ClientConfig{APIKey: "k", Backend: genai.BackendGeminiAPI})
+	if err != nil {
+		t.Fatalf("failed creating dummy genai client: %v", err)
+	}
+	if _, err := NewGeminiProvider(clientDummy, "", 0, "").Stream(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("expected empty model error, got %v", err)
+	}
+
+	ssePayload := strings.Join([]string{
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hidden thought","thought":true}]}}]}`,
+		``,
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Hello "}]}}]}`,
+		``,
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini"},{"functionCall":{"name":"bash","args":{"command":"ls"}}}]},"finishReason":"STOP"}]}`,
+		``,
+		``,
+	}, "\n")
+
+	var failNext bool
+	var capturedPath string
+	var capturedAlt string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		capturedAlt = r.URL.Query().Get("alt")
+
+		if failNext {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":400,"message":"bad stream request"}}`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(ssePayload))
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:      "test-gemini-key",
+		Backend:     genai.BackendGeminiAPI,
+		HTTPClient:  srv.Client(),
+		HTTPOptions: genai.HTTPOptions{BaseURL: srv.URL},
+	})
+	if err != nil {
+		t.Fatalf("failed creating genai client: %v", err)
+	}
+
+	prov := NewGeminiProvider(client, "gemini-2.5-flash", 2048, "Be ultra concise.")
+
+	var chunks []string
+	resp, err := prov.Stream(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil, func(chunk string) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("unexpected Stream error: %v", err)
+	}
+
+	if capturedPath != "/v1beta/models/gemini-2.5-flash:streamGenerateContent" {
+		t.Errorf("expected :streamGenerateContent path, got %q", capturedPath)
+	}
+	if capturedAlt != "sse" {
+		t.Errorf("expected alt=sse query parameter, got %q", capturedAlt)
+	}
+	if len(chunks) != 2 || chunks[0] != "Hello " || chunks[1] != "Gemini" {
+		t.Fatalf("expected non-thought chunks [Hello  Gemini], got %#v", chunks)
+	}
+	if resp.StopReason != "tool_use" {
+		t.Errorf("expected StopReason 'tool_use', got %q", resp.StopReason)
+	}
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 consolidated blocks (text + tool_use), got %+v", resp.Content)
+	}
+	if resp.Content[0].Type != api.BlockText || resp.Content[0].Text != "Hello Gemini" {
+		t.Errorf("expected consolidated text 'Hello Gemini', got %+v", resp.Content[0])
+	}
+	toolBlock := resp.Content[1]
+	if toolBlock.Type != api.BlockToolUse || toolBlock.ToolUseID != "gemini_call_1" || toolBlock.ToolName != "bash" || toolBlock.ToolInput != `{"command":"ls"}` {
+		t.Errorf("unexpected tool_use block: %+v", toolBlock)
+	}
+
+	// Nil onChunk callback must succeed cleanly without panicking.
+	nilSinkResp, err := prov.Stream(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected nil-callback Stream error: %v", err)
+	}
+	if len(nilSinkResp.Content) != 2 || nilSinkResp.Content[0].Text != "Hello Gemini" {
+		t.Errorf("unexpected response with nil callback: %+v", nilSinkResp)
+	}
+
+	// Server error must be surfaced, not ignored.
+	failNext = true
+	if _, err := prov.Stream(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil, nil); err == nil {
+		t.Fatalf("expected Stream to return HTTP 400 error")
+	}
+}
+
+// TestGeminiProvider_ExhaustiveEdgeCases verifies production Gemini wire invariants:
+// multi-turn ThoughtSignature round-trip on tool calls, safe JSON Schema serialization when
+// InputSchema/Required are empty, PromptFeedback block rejection, abnormal FinishReason errors
+// (SAFETY / MALFORMED_FUNCTION_CALL vs MAX_TOKENS), and canceled-context stream aborts.
+func TestGeminiProvider_ExhaustiveEdgeCases(t *testing.T) {
+	t.Run("multi-turn ThoughtSignature round-trip across Stream turns", func(t *testing.T) {
+		var turn int
+		var secondTurnBody map[string]any
+
+		// "c2lnX3Yx" is base64("sig_v1") as encoded on Gemini's wire JSON for ThoughtSignature []byte.
+		sseTurn1 := strings.Join([]string{
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"read_file","args":{"path":"go.mod"}},"thoughtSignature":"c2lnX3Yx"}]},"finishReason":"STOP"}]}`,
+			``,
+			``,
+		}, "\n")
+		sseTurn2 := strings.Join([]string{
+			`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Done reading go.mod."}]},"finishReason":"STOP"}]}`,
+			``,
+			``,
+		}, "\n")
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			turn++
+			w.Header().Set("Content-Type", "text/event-stream")
+			if turn == 1 {
+				_, _ = w.Write([]byte(sseTurn1))
+				return
+			}
+			if err := json.NewDecoder(r.Body).Decode(&secondTurnBody); err != nil {
+				t.Fatalf("failed decoding turn 2 body: %v", err)
+			}
+			_, _ = w.Write([]byte(sseTurn2))
+		}))
+		defer srv.Close()
+
+		ctx := context.Background()
+		client, err := genai.NewClient(ctx, &genai.ClientConfig{
+			APIKey:      "test-key",
+			Backend:     genai.BackendGeminiAPI,
+			HTTPClient:  srv.Client(),
+			HTTPOptions: genai.HTTPOptions{BaseURL: srv.URL},
+		})
+		if err != nil {
+			t.Fatalf("failed creating genai client: %v", err)
+		}
+
+		prov := NewGeminiProvider(client, "gemini-2.5-pro", 0, "")
+		tools := []api.ToolDef{{Name: "ping", Description: "No-arg tool"}}
+
+		resp1, err := prov.Stream(ctx, []api.Message{
+			{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "inspect"}}},
+		}, tools, nil)
+		if err != nil {
+			t.Fatalf("turn 1 Stream error: %v", err)
+		}
+		if len(resp1.Content) != 1 || !bytes.Equal(resp1.Content[0].ThoughtSignature, []byte("sig_v1")) {
+			t.Fatalf("expected captured ThoughtSignature 'sig_v1', got %+v", resp1.Content)
+		}
+
+		history := []api.Message{
+			{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "inspect"}}},
+			{Role: api.RoleAssistant, Content: resp1.Content},
+			{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockToolResult, ToolUseID: resp1.Content[0].ToolUseID, ToolResult: "module phi-agent-code"}}},
+		}
+
+		resp2, err := prov.Stream(ctx, history, tools, nil)
+		if err != nil {
+			t.Fatalf("turn 2 Stream error: %v", err)
+		}
+		if len(resp2.Content) != 1 || resp2.Content[0].Text != "Done reading go.mod." {
+			t.Fatalf("unexpected turn 2 response: %+v", resp2)
+		}
+
+		// Verify turn 2 wire payload echoed thoughtSignature back on the model functionCall part
+		// and omitted "required": null on the empty-arg tool schema.
+		rawTurn2, _ := json.Marshal(secondTurnBody)
+		if !strings.Contains(string(rawTurn2), `"thoughtSignature":"c2lnX3Yx"`) {
+			t.Errorf("expected turn 2 payload to preserve thoughtSignature, got %s", string(rawTurn2))
+		}
+		if strings.Contains(string(rawTurn2), `"required":null`) || strings.Contains(string(rawTurn2), `"properties":null`) {
+			t.Errorf("expected tool schema not to serialize null properties/required, got %s", string(rawTurn2))
+		}
+	})
+
+	t.Run("PromptFeedback block and abnormal FinishReason surface explicit errors", func(t *testing.T) {
+		var mode string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch mode {
+			case "prompt_block":
+				_, _ = w.Write([]byte(`{"promptFeedback":{"blockReason":"SAFETY"}}`))
+			case "malformed_tool":
+				_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL","finishMessage":"invalid JSON args"}]}`))
+			case "max_tokens":
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"partial output"}]},"finishReason":"MAX_TOKENS"}]}`))
+			}
+		}))
+		defer srv.Close()
+
+		ctx := context.Background()
+		client, err := genai.NewClient(ctx, &genai.ClientConfig{
+			APIKey:      "test-key",
+			Backend:     genai.BackendGeminiAPI,
+			HTTPClient:  srv.Client(),
+			HTTPOptions: genai.HTTPOptions{BaseURL: srv.URL},
+		})
+		if err != nil {
+			t.Fatalf("failed creating genai client: %v", err)
+		}
+		prov := NewGeminiProvider(client, "gemini-2.5-flash", 0, "")
+
+		mode = "prompt_block"
+		if _, err := prov.Send(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil); err == nil || !strings.Contains(err.Error(), "SAFETY") {
+			t.Fatalf("expected PromptFeedback SAFETY error, got %v", err)
+		}
+
+		mode = "malformed_tool"
+		if _, err := prov.Send(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil); err == nil || !strings.Contains(err.Error(), "MALFORMED_FUNCTION_CALL") {
+			t.Fatalf("expected MALFORMED_FUNCTION_CALL error, got %v", err)
+		}
+
+		mode = "max_tokens"
+		maxTokResp, err := prov.Send(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil)
+		if err != nil {
+			t.Fatalf("expected MAX_TOKENS with content to succeed, got %v", err)
+		}
+		if len(maxTokResp.Content) != 1 || maxTokResp.Content[0].Text != "partial output" {
+			t.Fatalf("expected partial text preserved on MAX_TOKENS, got %+v", maxTokResp)
+		}
+	})
+
+	t.Run("cancelled context aborts Stream cleanly", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"late\"}]}}]}\n\n"))
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+			APIKey:      "test-key",
+			Backend:     genai.BackendGeminiAPI,
+			HTTPClient:  srv.Client(),
+			HTTPOptions: genai.HTTPOptions{BaseURL: srv.URL},
+		})
+		if err != nil {
+			t.Fatalf("failed creating genai client: %v", err)
+		}
+		cancel()
+
+		_, err = NewGeminiProvider(client, "gemini-2.5-flash", 0, "").Stream(ctx, []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil, nil)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled on aborted Stream, got %v", err)
+		}
+	})
 }
 

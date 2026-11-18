@@ -529,3 +529,76 @@ func TestHarnessModelUpdate(t *testing.T) {
 	}
 }
 
+// TestHarnessStreamingChunks verifies partial AppendMsg deltas accumulate cleanly without waiting for newlines.
+func TestHarnessStreamingChunks(t *testing.T) {
+	h := newTestHarness()
+
+	updated1, _ := h.Update(AppendMsg("Quick"))
+	m1 := updated1.(harness)
+	if m1.output.String() != "Quick" {
+		t.Fatalf("expected immediate partial chunk 'Quick', got %q", m1.output.String())
+	}
+
+	updated2, _ := m1.Update(AppendMsg(" sort\n"))
+	m2 := updated2.(harness)
+	if m2.output.String() != "Quick sort\n" {
+		t.Fatalf("expected assembled output 'Quick sort\\n', got %q", m2.output.String())
+	}
+}
+
+// TestHarnessSpinnerResumesAfterApproval verifies that resolving an approval modal re-arms
+// the spinner tick command so the Thinking indicator keeps animating across tool turns.
+func TestHarnessSpinnerResumesAfterApproval(t *testing.T) {
+	h := newTestHarness()
+	h.state = stateRunning
+	replyCh := make(chan bool, 1)
+
+	// Transition into approval state and drain a tick while paused (which returns nil cmd).
+	awaiting, _ := h.Update(ApprovalRequest{Prompt: "Allow bash?", Reply: replyCh})
+	mAwaiting := awaiting.(harness)
+	ticked, stoppedCmd := mAwaiting.Update(spinner.TickMsg{})
+	if stoppedCmd != nil {
+		t.Fatalf("expected nil tick cmd while awaiting approval")
+	}
+
+	// Approving must transition back to stateRunning AND restart spinner ticks.
+	resumed, resumeCmd := ticked.(harness).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	mResumed := resumed.(harness)
+	if mResumed.state != stateRunning {
+		t.Fatalf("expected stateRunning after approval, got %d", mResumed.state)
+	}
+	if resumeCmd == nil {
+		t.Fatalf("expected non-nil spinner.Tick cmd after resuming stateRunning")
+	}
+	if !<-replyCh {
+		t.Fatalf("expected approval channel to receive true")
+	}
+}
+
+// TestHarnessViewportWrapping verifies that long messages and errors wrap cleanly inside
+// the active viewport width and re-wrap dynamically on WindowSizeMsg without clipping.
+func TestHarnessViewportWrapping(t *testing.T) {
+	h := newTestHarness()
+	sized, _ := h.Update(tea.WindowSizeMsg{Width: 32, Height: 20})
+	h = sized.(harness)
+
+	longMsg := "prefix " + strings.Repeat("word ", 12) + "end-marker\n"
+	updated, _ := h.Update(AppendMsg(longMsg))
+	m := updated.(harness)
+
+	view := m.viewport.View()
+	if !strings.Contains(view, "end-marker") {
+		t.Fatalf("expected wrapped viewport to preserve trailing 'end-marker', got:\n%s", view)
+	}
+	if m.viewport.TotalLineCount() <= 2 {
+		t.Errorf("expected long line to wrap across multiple lines at width 32, got %d lines", m.viewport.TotalLineCount())
+	}
+
+	// Long agentDoneMsg errors must wrap similarly without horizontal truncation.
+	h2, _ := m.Update(agentDoneMsg{err: fmt.Errorf("gemini generate content stream: Error 503 experiencing high demand temporary failure end-of-error")})
+	mErr := h2.(harness)
+	if !strings.Contains(mErr.viewport.View(), "end-of-error") {
+		t.Fatalf("expected wrapped error notice to display 'end-of-error', got:\n%s", mErr.viewport.View())
+	}
+}
+

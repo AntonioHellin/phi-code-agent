@@ -21,3 +21,9 @@ type Provider interface {
 type ModelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
+
+// Streamer is an optional capability interface (Interface Segregation Principle) implemented
+// by providers capable of emitting incremental text deltas while assembling the full Response.
+type Streamer interface {
+	Stream(ctx context.Context, messages []api.Message, tools []api.ToolDef, onChunk func(chunk string)) (api.Response, error)
+}

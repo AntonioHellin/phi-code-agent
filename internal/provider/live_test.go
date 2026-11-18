@@ -5,6 +5,7 @@ package provider
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,26 @@ func runLivePingSmoke(t *testing.T, prov Provider, timeout time.Duration) {
 	}
 
 	t.Logf("Live response verified (%s): %q (stop reason: %s)", prov.Model(), resp.Content[0].Text, resp.StopReason)
+
+	if streamer, ok := prov.(Streamer); ok {
+		streamCtx, streamCancel := context.WithTimeout(context.Background(), timeout)
+		defer streamCancel()
+
+		var chunks []string
+		streamResp, err := streamer.Stream(streamCtx, messages, nil, func(chunk string) {
+			chunks = append(chunks, chunk)
+		})
+		if err != nil {
+			t.Fatalf("live %s Stream API call failed: %v", prov.Model(), err)
+		}
+		if len(streamResp.Content) == 0 {
+			t.Fatalf("expected at least one content block from live stream %s, got 0", prov.Model())
+		}
+		if len(chunks) == 0 || strings.TrimSpace(strings.Join(chunks, "")) == "" {
+			t.Errorf("expected non-empty streamed chunks from live %s, got %#v", prov.Model(), chunks)
+		}
+		t.Logf("Live stream verified (%s): %d chunk(s), %q", prov.Model(), len(chunks), strings.Join(chunks, ""))
+	}
 }
 
 // TestLiveAnthropicSmoke exercises a live HTTP transaction with the Anthropic Messages API.

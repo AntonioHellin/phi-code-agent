@@ -33,6 +33,16 @@ func TestNewOllamaProvider_DefaultsAndAccessors(t *testing.T) {
 	if customProv.Model() != "deepseek-r1" {
 		t.Fatalf("expected updated model 'deepseek-r1', got %q", customProv.Model())
 	}
+
+	// Verify Client.Timeout is zero (so long streams are not aborted mid-body) while
+	// transport dial and response header timeouts protect against unresponsive daemons.
+	if defaultProv.client.Timeout != 0 {
+		t.Errorf("expected Client.Timeout=0 to avoid truncating active streams, got %v", defaultProv.client.Timeout)
+	}
+	tr, ok := defaultProv.client.Transport.(*http.Transport)
+	if !ok || tr.ResponseHeaderTimeout != defaultOllamaHeaderTimeout {
+		t.Errorf("expected http.Transport with ResponseHeaderTimeout=%v, got %#v", defaultOllamaHeaderTimeout, defaultProv.client.Transport)
+	}
 }
 
 // TestOllamaProvider_SendTextAndWireFormat verifies POST /api/chat serialization
@@ -414,6 +424,130 @@ func TestOllamaProvider_ListModels_WithHTTPTest(t *testing.T) {
 		cancel()
 
 		_, err := NewOllamaProvider(srv.URL, "llama3.2", "").ListModels(ctx)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
+}
+
+// TestOllamaProvider_Stream_WithHTTPTest verifies NDJSON /api/chat streaming with stream=true:
+// incremental text emission to onChunk, tool_calls consolidation with synthetic call IDs,
+// nil-callback tolerance, embedded stream errors, HTTP errors, and nil/context guards.
+func TestOllamaProvider_Stream_WithHTTPTest(t *testing.T) {
+	t.Run("nil receiver and nil client", func(t *testing.T) {
+		var nilProv *OllamaProvider
+		if _, err := nilProv.Stream(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "nil") {
+			t.Fatalf("expected nil provider error, got %v", err)
+		}
+		if _, err := (&OllamaProvider{baseURL: defaultOllamaBaseURL}).Stream(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "client is nil") {
+			t.Fatalf("expected nil client error, got %v", err)
+		}
+	})
+
+	t.Run("streams NDJSON text chunks and consolidates tool_calls", func(t *testing.T) {
+		var capturedPath string
+		var capturedStream bool
+
+		ndjson := strings.Join([]string{
+			`{"message":{"role":"assistant","content":"Local "},"done":false}`,
+			`{"message":{"role":"assistant","content":"stream"},"done":false}`,
+			`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"go.mod"}}}]},"done":true,"done_reason":"stop"}`,
+			``,
+		}, "\n")
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedPath = r.URL.Path
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed reading request body: %v", err)
+			}
+			var req ollamaChatRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("failed decoding request JSON: %v", err)
+			}
+			capturedStream = req.Stream
+
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = w.Write([]byte(ndjson))
+		}))
+		defer srv.Close()
+
+		prov := NewOllamaProvider(srv.URL, "llama3.2", "You are concise.")
+		var chunks []string
+		resp, err := prov.Stream(
+			context.Background(),
+			[]api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "read go.mod"}}}},
+			nil,
+			func(chunk string) {
+				chunks = append(chunks, chunk)
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected Stream error: %v", err)
+		}
+		if capturedPath != "/api/chat" || !capturedStream {
+			t.Errorf("expected POST /api/chat with stream=true, got path=%q stream=%v", capturedPath, capturedStream)
+		}
+		if len(chunks) != 2 || chunks[0] != "Local " || chunks[1] != "stream" {
+			t.Fatalf("expected chunks [Local  stream], got %#v", chunks)
+		}
+		if resp.StopReason != "tool_use" {
+			t.Errorf("expected StopReason 'tool_use', got %q", resp.StopReason)
+		}
+		if len(resp.Content) != 2 {
+			t.Fatalf("expected 2 blocks (text + tool_use), got %+v", resp.Content)
+		}
+		if resp.Content[0].Type != api.BlockText || resp.Content[0].Text != "Local stream" {
+			t.Errorf("expected consolidated text 'Local stream', got %+v", resp.Content[0])
+		}
+		toolBlock := resp.Content[1]
+		if toolBlock.Type != api.BlockToolUse || toolBlock.ToolUseID != "ollama_call_1" || toolBlock.ToolName != "read_file" || toolBlock.ToolInput != `{"path":"go.mod"}` {
+			t.Errorf("unexpected tool_use block: %+v", toolBlock)
+		}
+
+		// Nil callback safety
+		nilResp, err := prov.Stream(context.Background(), nil, nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected nil-callback Stream error: %v", err)
+		}
+		if len(nilResp.Content) != 2 || nilResp.Content[0].Text != "Local stream" {
+			t.Errorf("unexpected response for nil callback: %+v", nilResp)
+		}
+	})
+
+	t.Run("embedded stream error and HTTP 500", func(t *testing.T) {
+		srvErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("{\"message\":{\"role\":\"assistant\",\"content\":\"partial\"},\"done\":false}\n{\"error\":\"model unloaded\"}\n"))
+		}))
+		defer srvErr.Close()
+
+		_, err := NewOllamaProvider(srvErr.URL, "llama3.2", "").Stream(context.Background(), nil, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "model unloaded") {
+			t.Fatalf("expected embedded stream error 'model unloaded', got %v", err)
+		}
+
+		srvHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"gpu error"}`))
+		}))
+		defer srvHTTP.Close()
+
+		_, err = NewOllamaProvider(srvHTTP.URL, "llama3.2", "").Stream(context.Background(), nil, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "gpu error") {
+			t.Fatalf("expected HTTP 500 formatted error, got %v", err)
+		}
+	})
+
+	t.Run("cancelled context", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("{\"message\":{\"role\":\"assistant\",\"content\":\"too late\"},\"done\":true}\n"))
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := NewOllamaProvider(srv.URL, "llama3.2", "").Stream(ctx, nil, nil, nil)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}

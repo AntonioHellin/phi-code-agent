@@ -219,3 +219,46 @@ func TestMockProvider_ListModels(t *testing.T) {
 	}
 }
 
+// TestMockProvider_Stream verifies UTF-8 rune chunking, complete Response assembly,
+// nil-callback safety, and tool-use block preservation without streaming tool payloads as text.
+func TestMockProvider_Stream(t *testing.T) {
+	mock := &MockProvider{
+		StreamChunkSize: 3,
+		Responses: []api.Response{
+			{
+				Content: []api.Block{
+					{Type: api.BlockText, Text: "¡Hola🌍!"},
+					{Type: api.BlockToolUse, ToolUseID: "t1", ToolName: "bash", ToolInput: `{"command":"pwd"}`},
+				},
+				StopReason: "tool_use",
+			},
+		},
+	}
+
+	var chunks []string
+	resp, err := mock.Stream(context.Background(), []api.Message{{Role: api.RoleUser}}, nil, func(chunk string) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("unexpected Stream error: %v", err)
+	}
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 UTF-8 rune chunks of size 3, got %v", chunks)
+	}
+	if strings.Join(chunks, "") != "¡Hola🌍!" {
+		t.Errorf("expected joined chunks '¡Hola🌍!', got %q", strings.Join(chunks, ""))
+	}
+	if resp.StopReason != "tool_use" || len(resp.Content) != 2 || resp.Content[1].ToolName != "bash" {
+		t.Errorf("expected assembled response to preserve tool_use block, got %+v", resp)
+	}
+
+	// Nil callback fallback should still succeed without panics
+	defaultResp, err := mock.Stream(context.Background(), nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected nil-callback Stream error: %v", err)
+	}
+	if len(defaultResp.Content) != 1 || defaultResp.Content[0].Text != "mock default response" {
+		t.Errorf("unexpected default response: %+v", defaultResp)
+	}
+}
+

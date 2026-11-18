@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -40,18 +41,36 @@ func (p *AnthropicProvider) SetModel(name string) {
 	p.model = name
 }
 
-// Send fulfills the Provider interface: it maps agnostic domain messages and tool schemas
-// into the Anthropic wire format, executes the API call, and normalizes the response.
-func (p *AnthropicProvider) Send(ctx context.Context, messages []api.Message, tools []api.ToolDef) (api.Response, error) {
-	resp, err := p.client.Messages.New(ctx, anthropic.MessageNewParams{
+// validate guards against nil provider receivers or uninitialized Anthropic clients.
+func (p *AnthropicProvider) validate() error {
+	if p == nil {
+		return errors.New("anthropic provider is nil")
+	}
+	if p.client == nil {
+		return errors.New("anthropic client is nil")
+	}
+	return nil
+}
+
+// buildParams constructs the shared Anthropic Messages request payload used by both Send and Stream.
+func (p *AnthropicProvider) buildParams(messages []api.Message, tools []api.ToolDef) anthropic.MessageNewParams {
+	params := anthropic.MessageNewParams{
 		Model:     p.model,
 		MaxTokens: p.maxTokens,
-		System:    []anthropic.TextBlockParam{{Text: p.system}},
 		Messages:  toAnthropicMessages(messages),
 		Tools:     toAnthropicTools(tools),
-	})
-	if err != nil {
-		return api.Response{}, err
+	}
+	// Omit System when blank because Anthropic's Messages API rejects empty text blocks.
+	if strings.TrimSpace(p.system) != "" {
+		params.System = []anthropic.TextBlockParam{{Text: p.system}}
+	}
+	return params
+}
+
+// buildAnthropicResponse normalizes an Anthropic Message (from Send or Stream Accumulate) into domain api.Response.
+func buildAnthropicResponse(resp *anthropic.Message) api.Response {
+	if resp == nil {
+		return api.Response{}
 	}
 
 	var outBlocks []api.Block
@@ -74,7 +93,64 @@ func (p *AnthropicProvider) Send(ctx context.Context, messages []api.Message, to
 	return api.Response{
 		Content:    outBlocks,
 		StopReason: string(resp.StopReason),
-	}, nil
+	}
+}
+
+// Send fulfills the Provider interface: it maps agnostic domain messages and tool schemas
+// into the Anthropic wire format, executes the API call, and normalizes the response.
+func (p *AnthropicProvider) Send(ctx context.Context, messages []api.Message, tools []api.ToolDef) (api.Response, error) {
+	if err := p.validate(); err != nil {
+		return api.Response{}, err
+	}
+
+	resp, err := p.client.Messages.New(ctx, p.buildParams(messages, tools))
+	if err != nil {
+		return api.Response{}, err
+	}
+
+	return buildAnthropicResponse(resp), nil
+}
+
+// Stream implements provider.Streamer over Anthropic Server-Sent Events (SSE).
+// It accumulates every event into a complete Message (including partial input_json_delta tool inputs)
+// while dispatching incremental text deltas to onChunk in real time.
+func (p *AnthropicProvider) Stream(ctx context.Context, messages []api.Message, tools []api.ToolDef, onChunk func(string)) (api.Response, error) {
+	if err := p.validate(); err != nil {
+		return api.Response{}, err
+	}
+
+	stream := p.client.Messages.NewStreaming(ctx, p.buildParams(messages, tools))
+	defer stream.Close()
+
+	var acc anthropic.Message
+	for stream.Next() {
+		event := stream.Current()
+
+		// Accumulate full blocks (text + tool_use JSON fragments) before dispatching UI text deltas.
+		if err := acc.Accumulate(event); err != nil {
+			return api.Response{}, fmt.Errorf("anthropic stream accumulate: %w", err)
+		}
+
+		if onChunk == nil {
+			continue
+		}
+
+		switch ev := event.AsAny().(type) {
+		case anthropic.ContentBlockDeltaEvent:
+			switch d := ev.Delta.AsAny().(type) {
+			case anthropic.TextDelta:
+				if d.Text != "" {
+					onChunk(d.Text)
+				}
+			}
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		return api.Response{}, fmt.Errorf("anthropic stream: %w", err)
+	}
+
+	return buildAnthropicResponse(&acc), nil
 }
 
 // toAnthropicMessages translates vendor-agnostic domain Messages into Anthropic SDK MessageParams.
@@ -155,9 +231,9 @@ func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// Compile-time assertions ensuring AnthropicProvider satisfies Provider and ModelLister.
+// Compile-time assertions ensuring AnthropicProvider satisfies Provider, ModelLister, and Streamer.
 var (
 	_ Provider    = (*AnthropicProvider)(nil)
 	_ ModelLister = (*AnthropicProvider)(nil)
+	_ Streamer    = (*AnthropicProvider)(nil)
 )
-
