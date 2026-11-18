@@ -45,10 +45,12 @@ type ollamaChatRequest struct {
 
 // ollamaChatResponse models a non-streaming response payload returned by POST /api/chat.
 type ollamaChatResponse struct {
-	Message    ollamaMessage `json:"message"`
-	Done       bool          `json:"done"`
-	DoneReason string        `json:"done_reason,omitempty"`
-	Error      string        `json:"error,omitempty"`
+	Message         ollamaMessage `json:"message"`
+	Done            bool          `json:"done"`
+	DoneReason      string        `json:"done_reason,omitempty"`
+	Error           string        `json:"error,omitempty"`
+	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
+	EvalCount       int           `json:"eval_count,omitempty"`
 }
 
 // ollamaMessage represents a single turn in Ollama's OpenAI-style chat history.
@@ -187,8 +189,24 @@ func (p *OllamaProvider) doChatRequest(ctx context.Context, messages []api.Messa
 	return resp, nil
 }
 
-// buildOllamaResponse converts accumulated text and tool calls into the domain api.Response contract.
-func buildOllamaResponse(text string, toolCalls []ollamaToolCall) api.Response {
+// ollamaUsageFromChunk maps Ollama's prompt/generation evaluation counts into api.Usage.
+func ollamaUsageFromChunk(r ollamaChatResponse) api.Usage {
+	in := r.PromptEvalCount
+	if in < 0 {
+		in = 0
+	}
+	out := r.EvalCount
+	if out < 0 {
+		out = 0
+	}
+	return api.Usage{
+		InputTokens:  in,
+		OutputTokens: out,
+	}
+}
+
+// buildOllamaResponse converts accumulated text, tool calls, and usage metadata into domain api.Response.
+func buildOllamaResponse(text string, toolCalls []ollamaToolCall, usage api.Usage) api.Response {
 	var outBlocks []api.Block
 	if text != "" {
 		outBlocks = append(outBlocks, api.Block{
@@ -226,6 +244,7 @@ func buildOllamaResponse(text string, toolCalls []ollamaToolCall) api.Response {
 	return api.Response{
 		Content:    outBlocks,
 		StopReason: stopReason,
+		Usage:      usage,
 	}
 }
 
@@ -251,11 +270,11 @@ func (p *OllamaProvider) Send(ctx context.Context, messages []api.Message, tools
 		return api.Response{}, fmt.Errorf("ollama error: %s", chatResp.Error)
 	}
 
-	return buildOllamaResponse(chatResp.Message.Content, chatResp.Message.ToolCalls), nil
+	return buildOllamaResponse(chatResp.Message.Content, chatResp.Message.ToolCalls, ollamaUsageFromChunk(chatResp)), nil
 }
 
 // Stream implements provider.Streamer against Ollama's NDJSON /api/chat stream ("stream": true).
-// It decodes each JSON line incrementally, forwards text tokens to onChunk, and gathers tool calls.
+// It decodes each JSON line incrementally, forwards text tokens to onChunk, and gathers tool calls and final usage.
 func (p *OllamaProvider) Stream(ctx context.Context, messages []api.Message, tools []api.ToolDef, onChunk func(string)) (api.Response, error) {
 	resp, err := p.doChatRequest(ctx, messages, tools, true)
 	if err != nil {
@@ -268,6 +287,7 @@ func (p *OllamaProvider) Stream(ctx context.Context, messages []api.Message, too
 
 	var textBuf strings.Builder
 	var toolCalls []ollamaToolCall
+	var usage api.Usage
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -281,6 +301,11 @@ func (p *OllamaProvider) Stream(ctx context.Context, messages []api.Message, too
 		}
 		if chunk.Error != "" {
 			return api.Response{}, fmt.Errorf("ollama error: %s", chunk.Error)
+		}
+
+		// Ollama emits prompt_eval_count and eval_count on the final done=true chunk; overwrite cleanly.
+		if chunk.PromptEvalCount > 0 || chunk.EvalCount > 0 || chunk.Done {
+			usage = ollamaUsageFromChunk(chunk)
 		}
 
 		if chunk.Message.Content != "" {
@@ -301,7 +326,7 @@ func (p *OllamaProvider) Stream(ctx context.Context, messages []api.Message, too
 		return api.Response{}, fmt.Errorf("read ollama stream: %w", err)
 	}
 
-	return buildOllamaResponse(textBuf.String(), toolCalls), nil
+	return buildOllamaResponse(textBuf.String(), toolCalls, usage), nil
 }
 
 // toOllamaMessages converts domain conversation history into Ollama's message array,
@@ -473,4 +498,3 @@ var (
 	_ ModelLister = (*OllamaProvider)(nil)
 	_ Streamer    = (*OllamaProvider)(nil)
 )
-

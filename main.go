@@ -132,11 +132,11 @@ func main() {
 	// Option 2: Sliding Window without logging (retains last K turns, e.g. 6 messages)
 	// compactor = &compact.SlidingWindow{KeepLast: 6}
 
-	// Option 3: Sliding Window WITH Logging (ACTIVE - logs audit trail to compactions.log)
-	compactor = &compact.WithLogging{
-		Inner:   &compact.SlidingWindow{KeepLast: 6},
-		LogPath: "compactions.log",
-	}
+	// Option 3: Sliding Window WITH Logging (logs audit trail to compactions.log)
+	// compactor = &compact.WithLogging{
+	// 	Inner:   &compact.SlidingWindow{KeepLast: 6},
+	// 	LogPath: "compactions.log",
+	// }
 
 	// Option 4: LLM-driven Summarization with Logging (summarizes older turns when threshold reached)
 	// compactor = &compact.WithLogging{
@@ -147,6 +147,12 @@ func main() {
 	// 	},
 	// 	LogPath: "compactions.log",
 	// }
+
+	// Option 5: Token Budget WITH Logging (ACTIVE - prunes oldest turns above 40,000 estimated tokens)
+	compactor = &compact.WithLogging{
+		Inner:   &compact.TokenBudget{MaxTokens: 40000},
+		LogPath: "compactions.log",
+	}
 
 	// Instantiate the root interactive agent with complete tool registry and interactive confirmation
 	rootAgent = agent.New(agent.Agent{

@@ -11,6 +11,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"phi-agent-code/internal/api"
+	"phi-agent-code/internal/compact"
 	"phi-agent-code/internal/provider"
 	"phi-agent-code/internal/tool"
 )
@@ -33,6 +35,7 @@ func init() {
 	commands["tools"] = command{description: "list available tools", run: cmdTools}
 	commands["subagents"] = command{description: "list available subagent profiles", run: cmdSubagents}
 	commands["compact"] = command{description: "compact conversation history", run: cmdCompact}
+	commands["tokens"] = command{description: "show session token usage and EUR cost", run: cmdTokens}
 	commands["exit"] = command{description: "exit the harness", run: cmdExit}
 	commands["quit"] = command{description: "exit the harness (alias to /exit)", run: cmdExit}
 }
@@ -319,4 +322,88 @@ func cmdCompact(_ string) {
 		return
 	}
 	fmt.Printf("compacted: %d -> %d messages\n", before, len(compacted))
+}
+
+// formatIntWithCommas renders non-negative and negative integers with thousands separators.
+func formatIntWithCommas(n int) string {
+	neg := n < 0
+	raw := fmt.Sprintf("%d", n)
+	if neg {
+		raw = raw[1:]
+	}
+	if len(raw) <= 3 {
+		if neg {
+			return "-" + raw
+		}
+		return raw
+	}
+
+	var b strings.Builder
+	if neg {
+		b.WriteByte('-')
+	}
+	rem := len(raw) % 3
+	if rem > 0 {
+		b.WriteString(raw[:rem])
+		if len(raw) > rem {
+			b.WriteByte(',')
+		}
+	}
+	for i := rem; i < len(raw); i += 3 {
+		if i > rem {
+			b.WriteByte(',')
+		}
+		b.WriteString(raw[i : i+3])
+	}
+	return b.String()
+}
+
+// activeTokenBudget inspects the configured compactor chain (including decorators like WithLogging)
+// and returns the active TokenBudget MaxTokens limit, or 0 if another strategy is active.
+func activeTokenBudget(c compact.CompactionStrategy) int {
+	switch s := c.(type) {
+	case *compact.TokenBudget:
+		if s != nil {
+			return s.MaxTokens
+		}
+	case *compact.WithLogging:
+		if s != nil {
+			return activeTokenBudget(s.Inner)
+		}
+	}
+	return 0
+}
+
+// cmdTokens displays cumulative session token usage, estimated context size, and estimated EUR cost.
+func cmdTokens(_ string) {
+	var usage api.Usage
+	var contextEstimate int
+	if rootAgent != nil {
+		usage = rootAgent.Usage()
+		contextEstimate = compact.EstimateMessagesTokens(rootAgent.Messages())
+	}
+
+	modelName := ""
+	if prov != nil {
+		modelName = prov.Model()
+	}
+
+	fmt.Println("Session Token Usage:")
+	fmt.Printf("  %-18s %10s\n", "Input tokens:", formatIntWithCommas(usage.InputTokens))
+	fmt.Printf("  %-18s %10s\n", "Output tokens:", formatIntWithCommas(usage.OutputTokens))
+	fmt.Printf("  %-18s %10s\n", "Cache write:", formatIntWithCommas(usage.CacheCreationTokens))
+	fmt.Printf("  %-18s %10s\n", "Cache read:", formatIntWithCommas(usage.CacheReadTokens))
+	fmt.Printf("  %-18s %10s\n", "Total tokens:", formatIntWithCommas(usage.Total()))
+
+	if budget := activeTokenBudget(compactor); budget > 0 {
+		fmt.Printf("  %-18s ~%s / %s tokens\n", "Context budget:", formatIntWithCommas(contextEstimate), formatIntWithCommas(budget))
+	} else if rootAgent != nil {
+		fmt.Printf("  %-18s ~%s tokens\n", "Context history:", formatIntWithCommas(contextEstimate))
+	}
+
+	if costEUR, known := provider.EstimateCostEUR(modelName, usage); known {
+		fmt.Printf("  %-18s €%.4f EUR (%s)\n", "Estimated cost:", costEUR, modelName)
+		return
+	}
+	fmt.Printf("  %-18s unknown rate for %q\n", "Estimated cost:", modelName)
 }

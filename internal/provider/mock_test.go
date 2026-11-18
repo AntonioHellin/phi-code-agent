@@ -231,6 +231,7 @@ func TestMockProvider_Stream(t *testing.T) {
 					{Type: api.BlockToolUse, ToolUseID: "t1", ToolName: "bash", ToolInput: `{"command":"pwd"}`},
 				},
 				StopReason: "tool_use",
+				Usage:      api.Usage{InputTokens: 77, OutputTokens: 19, CacheReadTokens: 11},
 			},
 		},
 	}
@@ -251,14 +252,20 @@ func TestMockProvider_Stream(t *testing.T) {
 	if resp.StopReason != "tool_use" || len(resp.Content) != 2 || resp.Content[1].ToolName != "bash" {
 		t.Errorf("expected assembled response to preserve tool_use block, got %+v", resp)
 	}
+	if resp.Usage.InputTokens != 77 || resp.Usage.OutputTokens != 19 || resp.Usage.CacheReadTokens != 11 {
+		t.Errorf("expected scripted Stream usage preserved, got %+v", resp.Usage)
+	}
 
-	// Nil callback fallback should still succeed without panics
-	defaultResp, err := mock.Stream(context.Background(), nil, nil, nil)
+	// Nil callback fallback should still succeed without panics and populate synthetic usage
+	defaultResp, err := mock.Stream(context.Background(), []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "explain Go"}}}}, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected nil-callback Stream error: %v", err)
 	}
 	if len(defaultResp.Content) != 1 || defaultResp.Content[0].Text != "mock default response" {
 		t.Errorf("unexpected default response: %+v", defaultResp)
+	}
+	if defaultResp.Usage.InputTokens <= 0 || defaultResp.Usage.OutputTokens <= 0 {
+		t.Errorf("expected positive fallback mock usage, got %+v", defaultResp.Usage)
 	}
 }
 

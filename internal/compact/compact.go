@@ -18,6 +18,12 @@ type CompactionStrategy interface {
 	Compact(ctx context.Context, messages []api.Message) ([]api.Message, error)
 }
 
+// isCleanSplitBoundary reports whether index i can safely start a compacted history slice
+// without stranding tool_result responses or assistant tool_use declarations.
+func isCleanSplitBoundary(message api.Message) bool {
+	return message.Role == api.RoleUser && !message.HasToolResult()
+}
+
 // SafeSplitPoint finds the nearest valid split index at or before desiredCutIndex.
 // It ensures cuts happen on an authentic user turn and never between a
 // tool_use and its corresponding tool_result.
@@ -31,8 +37,7 @@ func SafeSplitPoint(messages []api.Message, desiredCutIndex int) int {
 
 	// Walk backward to locate a genuine user turn that is NOT a tool result
 	for index := desiredCutIndex; index > 0; index-- {
-		targetMessage := messages[index]
-		if targetMessage.Role == api.RoleUser && !targetMessage.HasToolResult() {
+		if isCleanSplitBoundary(messages[index]) {
 			return index
 		}
 	}
@@ -60,6 +65,67 @@ func (window *SlidingWindow) Compact(_ context.Context, messages []api.Message) 
 	desiredCutIndex := len(messages) - window.KeepLast
 	safeIndex := SafeSplitPoint(messages, desiredCutIndex)
 	return messages[safeIndex:], nil
+}
+
+// EstimateMessageTokens computes a deterministic pre-call token estimate for a single domain message
+// using a ~4 characters/token ceiling heuristic plus a fixed per-message framing overhead.
+func EstimateMessageTokens(message api.Message) int {
+	chars := 0
+	for _, block := range message.Content {
+		chars += len(block.Text) + len(block.ToolUseID) + len(block.ToolName) + len(block.ToolInput) + len(block.ToolResult)
+	}
+	// Add 4 framing tokens per message so empty or very short turns remain non-zero.
+	return 4 + (chars+3)/4
+}
+
+// EstimateMessagesTokens sums estimated pre-call tokens across an entire conversation slice.
+func EstimateMessagesTokens(messages []api.Message) int {
+	total := 0
+	for _, msg := range messages {
+		total += EstimateMessageTokens(msg)
+	}
+	return total
+}
+
+// TokenBudget prunes the oldest conversation turns whenever the estimated history exceeds MaxTokens.
+// Every cut snaps to a clean user boundary (non-tool_result) so tool_use/tool_result pairs remain atomic,
+// and at least the newest clean turn is always retained even if it alone exceeds MaxTokens.
+type TokenBudget struct {
+	MaxTokens int
+}
+
+// Compact trims oldest turns from messages until EstimateMessagesTokens(kept) <= MaxTokens.
+func (strategy *TokenBudget) Compact(_ context.Context, messages []api.Message) ([]api.Message, error) {
+	if strategy == nil || strategy.MaxTokens <= 0 || len(messages) == 0 {
+		return messages, nil
+	}
+
+	// Build suffix token totals from newest to oldest in O(n) so each candidate cut point
+	// knows the exact estimated weight of messages[i:].
+	suffixTokens := make([]int, len(messages))
+	running := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		running += EstimateMessageTokens(messages[i])
+		suffixTokens[i] = running
+	}
+
+	if suffixTokens[0] <= strategy.MaxTokens {
+		return messages, nil
+	}
+
+	lastClean := 0
+	for i := 0; i < len(messages); i++ {
+		if i > 0 && !isCleanSplitBoundary(messages[i]) {
+			continue
+		}
+		lastClean = i
+		if suffixTokens[i] <= strategy.MaxTokens {
+			return messages[i:], nil
+		}
+	}
+
+	// Even the newest clean turn exceeds MaxTokens on its own; retain it rather than wiping context.
+	return messages[lastClean:], nil
 }
 
 // Summarize uses the LLM provider to summarize old conversation turns

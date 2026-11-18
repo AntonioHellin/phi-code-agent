@@ -242,7 +242,7 @@ func TestAnthropicProvider_Stream_WithHTTPTest(t *testing.T) {
 
 	ssePayload := strings.Join([]string{
 		`event: message_start`,
-		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-haiku-5-5","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-haiku-5-5","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":15,"cache_read_input_tokens":30}}}`,
 		``,
 		`event: content_block_start`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
@@ -344,6 +344,9 @@ func TestAnthropicProvider_Stream_WithHTTPTest(t *testing.T) {
 	toolBlock := resp.Content[1]
 	if toolBlock.Type != api.BlockToolUse || toolBlock.ToolUseID != "call_1" || toolBlock.ToolName != "bash" || toolBlock.ToolInput != `{"command":"pwd"}` {
 		t.Errorf("unexpected accumulated tool_use block: %+v", toolBlock)
+	}
+	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 20 || resp.Usage.CacheCreationTokens != 15 || resp.Usage.CacheReadTokens != 30 {
+		t.Errorf("expected Anthropic stream usage {in:10 out:20 cacheCreate:15 cacheRead:30}, got %+v", resp.Usage)
 	}
 
 	// Nil onChunk callback must succeed safely without panicking.

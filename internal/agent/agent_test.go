@@ -776,3 +776,65 @@ func TestAgentLoop_Streaming(t *testing.T) {
 		}
 	})
 }
+
+// TestAgentUsageAccounting verifies cumulative token accounting across multi-turn tool calls,
+// streaming turns, Clear() persistence, and external RecordUsage rollups (subagents).
+func TestAgentUsageAccounting(t *testing.T) {
+	mock := &provider.MockProvider{
+		StreamChunkSize: 4,
+		Responses: []api.Response{
+			// Turn 1: tool_use turn (Send or Stream)
+			{
+				Content: []api.Block{
+					{Type: api.BlockToolUse, ToolUseID: "u1", ToolName: "echo", ToolInput: "hi"},
+				},
+				StopReason: "tool_use",
+				Usage:      api.Usage{InputTokens: 100, OutputTokens: 20, CacheCreationTokens: 50},
+			},
+			// Turn 2: final streamed answer
+			{
+				Content:    []api.Block{{Type: api.BlockText, Text: "Final answer"}},
+				StopReason: "end_turn",
+				Usage:      api.Usage{InputTokens: 140, OutputTokens: 30, CacheReadTokens: 80},
+			},
+		},
+	}
+
+	registry := tool.NewToolRegistry()
+	registry.Register(mockEchoTool{})
+
+	a := New(Agent{
+		Name:     "usage-agent",
+		Provider: mock,
+		Tools:    registry,
+		Policy:   permission.ReadOnlyPolicy{},
+		OnChunk:  func(string) {}, // Exercise Streamer path cleanly
+	})
+
+	if _, err := a.Run(context.Background(), "run echo"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := a.Usage()
+	if got.InputTokens != 240 || got.OutputTokens != 50 || got.CacheCreationTokens != 50 || got.CacheReadTokens != 80 {
+		t.Fatalf("expected cumulative usage {in:240 out:50 create:50 read:80}, got %+v", got)
+	}
+	if got.Total() != 420 {
+		t.Errorf("expected Total() = 420, got %d", got.Total())
+	}
+
+	// Clearing conversation history must NOT erase already-billed session tokens.
+	a.Clear()
+	if len(a.Messages()) != 0 {
+		t.Fatalf("expected Clear() to wipe messages")
+	}
+	if a.Usage() != got {
+		t.Errorf("expected Clear() to preserve session usage %+v, got %+v", got, a.Usage())
+	}
+
+	// Delegated subagent rollups via RecordUsage accumulate onto root session totals.
+	a.RecordUsage(api.Usage{InputTokens: 60, OutputTokens: 10})
+	if a.Usage().InputTokens != 300 || a.Usage().OutputTokens != 60 {
+		t.Errorf("expected RecordUsage rollup {in:300 out:60}, got %+v", a.Usage())
+	}
+}

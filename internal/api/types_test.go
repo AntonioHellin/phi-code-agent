@@ -93,3 +93,19 @@ func TestConstantsIntegrity(t *testing.T) {
 	}
 }
 
+func TestUsageAccounting(t *testing.T) {
+	var nilUsage *Usage
+	nilUsage.Add(Usage{InputTokens: 10}) // Must not panic
+
+	var total Usage
+	total.Add(Usage{InputTokens: 100, OutputTokens: 25, CacheCreationTokens: 50, CacheReadTokens: 10})
+	total.Add(Usage{InputTokens: 40, OutputTokens: 15, CacheReadTokens: 150})
+
+	if total.InputTokens != 140 || total.OutputTokens != 40 || total.CacheCreationTokens != 50 || total.CacheReadTokens != 160 {
+		t.Fatalf("unexpected accumulated Usage totals: %+v", total)
+	}
+	if got := total.Total(); got != 390 {
+		t.Errorf("expected Total() = 390, got %d", got)
+	}
+}
+

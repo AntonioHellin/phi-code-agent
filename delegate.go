@@ -74,8 +74,11 @@ func (delegateTool *DelegateTool) Execute(ctx context.Context, rawInput string) 
 		LogPrefix: fmt.Sprintf("[%s]", delegationRequest.Agent),
 	})
 
-	// Run child agent loop to completion
+	// Run child agent loop to completion and roll up its token usage into the root session tracker.
 	summaryResult, err := researcherSubagent.Run(ctx, delegationRequest.Prompt)
+	if rootAgent != nil {
+		rootAgent.RecordUsage(researcherSubagent.Usage())
+	}
 	if err != nil {
 		return fmt.Sprintf("subagent execution error: %v", err), true
 	}

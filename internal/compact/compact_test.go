@@ -138,14 +138,14 @@ func TestSlidingWindow(t *testing.T) {
 	strategy := &SlidingWindow{KeepLast: 4}
 
 	msgs := []api.Message{
-		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 1"}}},           // 0
-		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 1"}}},     // 1
-		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 2: run tool"}}}, // 2
-		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockToolUse, ToolUseID: "t1"}}},  // 3
-		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockToolResult, ToolUseID: "t1"}}},   // 4
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 1"}}},             // 0
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 1"}}},       // 1
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 2: run tool"}}},   // 2
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockToolUse, ToolUseID: "t1"}}},    // 3
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockToolResult, ToolUseID: "t1"}}},      // 4
 		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Tool finished"}}}, // 5
-		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 3"}}},           // 6
-		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 3"}}},     // 7
+		{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Turn 3"}}},             // 6
+		{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "Reply 3"}}},       // 7
 	}
 
 	// len(msgs) = 8, KeepLast = 4 -> desired cut = 8 - 4 = 4.
@@ -291,3 +291,135 @@ func TestSummarize(t *testing.T) {
 	})
 }
 
+func TestEstimateTokens(t *testing.T) {
+	emptyMsg := api.Message{Role: api.RoleUser}
+	if got := EstimateMessageTokens(emptyMsg); got != 4 {
+		t.Fatalf("expected 4 framing tokens for empty message, got %d", got)
+	}
+
+	toolMsg := api.Message{
+		Role: api.RoleAssistant,
+		Content: []api.Block{
+			{Type: api.BlockText, Text: strings.Repeat("a", 40)},                                // 40 chars
+			{Type: api.BlockToolUse, ToolUseID: "id12", ToolName: "bash", ToolInput: `{"a":1}`}, // 4+4+7 = 15 chars
+		},
+	}
+	// Total 55 chars -> 4 + (55+3)/4 = 4 + 14 = 18 tokens
+	if got := EstimateMessageTokens(toolMsg); got != 18 {
+		t.Fatalf("expected 18 estimated tokens, got %d", got)
+	}
+
+	if total := EstimateMessagesTokens([]api.Message{emptyMsg, toolMsg}); total != 22 {
+		t.Fatalf("expected sum 22 estimated tokens, got %d", total)
+	}
+}
+
+func TestTokenBudget(t *testing.T) {
+	msg := func(role api.Role, text string) api.Message {
+		return api.Message{Role: role, Content: []api.Block{{Type: api.BlockText, Text: text}}}
+	}
+
+	t.Run("disabled or under budget keeps all messages", func(t *testing.T) {
+		msgs := []api.Message{msg(api.RoleUser, "hi"), msg(api.RoleAssistant, "hello")}
+		if res, err := (&TokenBudget{MaxTokens: 0}).Compact(context.Background(), msgs); err != nil || len(res) != 2 {
+			t.Fatalf("expected MaxTokens<=0 no-op, got len=%d err=%v", len(res), err)
+		}
+		var nilBudget *TokenBudget
+		if res, err := nilBudget.Compact(context.Background(), msgs); err != nil || len(res) != 2 {
+			t.Fatalf("expected nil receiver no-op, got len=%d err=%v", len(res), err)
+		}
+		if res, err := (&TokenBudget{MaxTokens: 100}).Compact(context.Background(), msgs); err != nil || len(res) != 2 {
+			t.Fatalf("expected under-budget no-op, got len=%d err=%v", len(res), err)
+		}
+	})
+
+	t.Run("prunes oldest clean turns to fit within MaxTokens", func(t *testing.T) {
+		// Each 40-char message estimates to 4 + 40/4 = 14 tokens. Total = 6 * 14 = 84 tokens.
+		payload := strings.Repeat("x", 40)
+		msgs := []api.Message{
+			msg(api.RoleUser, payload),      // suffix = 84
+			msg(api.RoleAssistant, payload), // suffix = 70 (not clean)
+			msg(api.RoleUser, payload),      // suffix = 56
+			msg(api.RoleAssistant, payload), // suffix = 42 (not clean)
+			msg(api.RoleUser, payload),      // suffix = 28
+			msg(api.RoleAssistant, payload), // suffix = 14 (not clean)
+		}
+
+		res, err := (&TokenBudget{MaxTokens: 40}).Compact(context.Background(), msgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 2 {
+			t.Fatalf("expected 2 kept messages (28 <= 40), got %d", len(res))
+		}
+		if EstimateMessagesTokens(res) > 40 {
+			t.Errorf("expected kept messages <= 40 tokens, got %d", EstimateMessagesTokens(res))
+		}
+	})
+
+	t.Run("preserves tool_use/tool_result atomicity and drops large finished tool turn", func(t *testing.T) {
+		hugeOutput := strings.Repeat("log line\n", 80) // ~720 chars (~184 tokens)
+		msgs := []api.Message{
+			msg(api.RoleUser, "old turn"),
+			msg(api.RoleAssistant, "old reply"),
+			msg(api.RoleUser, "run huge bash"),
+			{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockToolUse, ToolUseID: "c1", ToolName: "bash", ToolInput: "{}"}}},
+			{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockToolResult, ToolUseID: "c1", ToolResult: hugeOutput}}},
+			msg(api.RoleAssistant, "finished"),
+			msg(api.RoleUser, "latest clean turn"),
+		}
+
+		// Budget allows only the newest clean turn ("latest clean turn" ~ 9 tokens), pruning finished tool chain cleanly.
+		res, err := (&TokenBudget{MaxTokens: 30}).Compact(context.Background(), msgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 || res[0].Content[0].Text != "latest clean turn" || res[0].HasToolResult() {
+			t.Fatalf("expected clean latest turn only without orphaned tool_result, got %+v", res)
+		}
+	})
+
+	t.Run("retains active oversized tool turn rather than wiping history", func(t *testing.T) {
+		hugeOutput := strings.Repeat("z", 400) // ~104 tokens
+		msgs := []api.Message{
+			msg(api.RoleUser, "turn 1"),
+			msg(api.RoleAssistant, "reply 1"),
+			msg(api.RoleUser, "turn 2 tool"),
+			{Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockToolUse, ToolUseID: "c2", ToolName: "read_file", ToolInput: "{}"}}},
+			{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockToolResult, ToolUseID: "c2", ToolResult: hugeOutput}}},
+		}
+
+		// Budget (20) is smaller than active turn 2 (~130), so turn 1 is pruned and active turn 2 stays atomic.
+		res, err := (&TokenBudget{MaxTokens: 20}).Compact(context.Background(), msgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 3 || res[0].Content[0].Text != "turn 2 tool" || res[0].HasToolResult() {
+			t.Fatalf("expected active turn 2 retained intact from 'turn 2 tool', got %+v", res)
+		}
+	})
+
+	t.Run("works with WithLogging decorator", func(t *testing.T) {
+		logPath := filepath.Join(t.TempDir(), "budget.log")
+		decorator := &WithLogging{
+			Inner:   &TokenBudget{MaxTokens: 20},
+			LogPath: logPath,
+		}
+		msgs := []api.Message{
+			msg(api.RoleUser, strings.Repeat("a", 40)),
+			msg(api.RoleAssistant, strings.Repeat("b", 40)),
+			msg(api.RoleUser, "keep"),
+		}
+		res, err := decorator.Compact(context.Background(), msgs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("expected 1 kept message, got %d", len(res))
+		}
+		data, err := os.ReadFile(logPath)
+		if err != nil || !strings.Contains(string(data), "Compacted: 3 -> 1 messages") {
+			t.Fatalf("expected compaction log entry, got err=%v content=%q", err, string(data))
+		}
+	})
+}

@@ -68,6 +68,7 @@ func (p *AnthropicProvider) buildParams(messages []api.Message, tools []api.Tool
 }
 
 // buildAnthropicResponse normalizes an Anthropic Message (from Send or Stream Accumulate) into domain api.Response.
+// It maps resp.Usage directly because Anthropic's InputTokens excludes cached tokens and Accumulate already merges deltas.
 func buildAnthropicResponse(resp *anthropic.Message) api.Response {
 	if resp == nil {
 		return api.Response{}
@@ -93,6 +94,12 @@ func buildAnthropicResponse(resp *anthropic.Message) api.Response {
 	return api.Response{
 		Content:    outBlocks,
 		StopReason: string(resp.StopReason),
+		Usage: api.Usage{
+			InputTokens:         int(resp.Usage.InputTokens),
+			OutputTokens:        int(resp.Usage.OutputTokens),
+			CacheCreationTokens: int(resp.Usage.CacheCreationInputTokens),
+			CacheReadTokens:     int(resp.Usage.CacheReadInputTokens),
+		},
 	}
 }
 
