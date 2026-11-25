@@ -109,12 +109,32 @@ func buildProvider(name, modelOverride, system string) (provider.Provider, error
 	}
 }
 
+// formatUsageStatus formats cumulative rootAgent token consumption and estimated EUR cost
+// for the TUI status bar, returning an empty string before the first billed turn.
+func formatUsageStatus() string {
+	if rootAgent == nil || prov == nil {
+		return ""
+	}
+
+	usage := rootAgent.Usage()
+	if usage.Total() == 0 {
+		return ""
+	}
+	line := fmt.Sprintf("%s in · %s out", formatIntWithCommas(usage.InputTokens), formatIntWithCommas(usage.OutputTokens))
+	if costEUR, known := provider.EstimateCostEUR(prov.Model(), usage); known {
+		line += fmt.Sprintf(" · ~€%.4f", costEUR)
+	}
+	return line
+}
+
 func main() {
 	providerFlag := flag.String("provider", "gemini", "LLM provider backend: gemini (default), anthropic, ollama, mock")
 	modelFlag := flag.String("model", "", "Override active model ID for the selected provider")
 	flag.Parse()
 
 	var err error
+	var app *ui.Program
+
 	prov, err = buildProvider(*providerFlag, *modelFlag, systemPrompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "provider initialization error: %v\n", err)
@@ -171,11 +191,12 @@ func main() {
 			return nil
 		}
 		_, err := rootAgent.Run(ctx, input)
+		app.SetUsageStatus(formatUsageStatus())
 		return err
 	}
 
 	// Initialize the full TUI with integrated banner and startup light sweep animation
-	app, err := ui.NewProgram(runner, prov.Model())
+	app, err = ui.NewProgram(runner, prov.Model())
 	if err != nil {
 		fmt.Printf("failed to initialize TUI: %v\n", err)
 		return
@@ -185,7 +206,10 @@ func main() {
 	rootAgent.Confirm = app.Confirm
 	rootAgent.OnChunk = app.Append
 	selectModel = app.SelectModel
-	onModelSet = app.SetModel
+	onModelSet = func(model string) {
+		app.SetModel(model)
+		app.SetUsageStatus(formatUsageStatus())
+	}
 	if err := app.Run(); err != nil {
 		fmt.Printf("TUI error: %v\n", err)
 	}

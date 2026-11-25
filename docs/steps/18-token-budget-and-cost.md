@@ -7,7 +7,7 @@ Counting turns (e.g. `KeepLast: 10`) is a blunt instrument: a single turn that r
 In this step, we implement:
 1. **Normalized Token Usage (`api.Usage`)**: Capturing input, output, cache-read, and cache-write tokens uniformly across Anthropic, Gemini, Ollama, and Mock (for both `Send` and `Stream`).
 2. **`TokenBudget` Compactor**: Pruning oldest messages safely (`SafeSplitPoint`) based on an exact pre-call token budget (e.g. keep under 40,000 tokens).
-3. **Session Cost Tracker (EUR) & `/tokens` Command**: Accumulating turn usage in `Agent` (including delegated subagents via `RecordUsage`) and calculating estimated `EUR` cost using per-model pricing rates (`LookupPricing` / `EstimateCostEUR`).
+3. **Session Cost Tracker (EUR), Live TUI Status Bar & `/tokens` Command**: Accumulating turn usage in `Agent` (including delegated subagents via `RecordUsage`), calculating estimated `EUR` cost using per-model pricing rates (`LookupPricing` / `EstimateCostEUR`), and surfacing a live summary line above the TUI input alongside the detailed `/tokens` breakdown.
 
 ```mermaid
 flowchart LR
@@ -39,17 +39,18 @@ flowchart LR
 2. Extract and normalize usage metadata in `AnthropicProvider`, `GeminiProvider`, `OllamaProvider`, and `MockProvider` across both `Send` and `Stream`.
 3. Implement `EstimateMessageTokens`, `EstimateMessagesTokens`, shared `isCleanSplitBoundary`, and `TokenBudget` compaction strategy in `internal/compact/compact.go` (preserving `NoCompaction`, `SlidingWindow`, `Summarize`, and `WithLogging`), and wire Option 5 (`WithLogging` wrapping `&compact.TokenBudget{MaxTokens: 40000}`) in `main.go` while keeping Options 1–4 intact.
 4. Add EUR pricing lookup (`internal/provider/pricing.go`: `ModelPricing`, `LookupPricing`, `EstimateCostEUR`), track cumulative `Usage` in `Agent` (`Usage()`, `RecordUsage()`) plus subagent rollup in `delegate.go`.
-5. Implement the `/tokens` slash command in `commands.go` (`cmdTokens`, `formatIntWithCommas`, `activeTokenBudget`) displaying the cumulative token breakdown, active context estimate vs. budget, and estimated EUR cost.
+5. Implement the `/tokens` slash command in `commands.go` (`cmdTokens`, `formatIntWithCommas`, `activeTokenBudget`) displaying the cumulative token breakdown, active context estimate vs. budget, and estimated EUR cost, plus the persistent live TUI status bar above the input box (`Program.SetUsageStatus` in `internal/ui/program.go` fed by `formatUsageStatus` in `main.go` after `rootAgent.Run` and `/model` switches).
 
 ## 4. Verification & Exercises
 
-### Test 1: Automated Token Estimation, Budgeting, Agent Accounting, Pricing & `/tokens`
-Run `go test -v . ./internal/api ./internal/compact ./internal/provider ./internal/agent` to verify:
+### Test 1: Automated Token Estimation, Budgeting, Agent Accounting, Pricing, TUI Bar & `/tokens`
+Run `go test -v . ./internal/api ./internal/compact ./internal/provider ./internal/agent ./internal/ui` to verify:
 - `internal/api/types_test.go`: `TestUsageAccounting` validates `Usage.Add`, `Usage.Total`, and nil-receiver guards.
 - `internal/provider/pricing_test.go`: `TestLookupPricingAndEstimateCostEUR` validates Claude/Gemini EUR tiers with caching multipliers, local Ollama/Mock zero-cost models, and unknown model `(0, false)` fallback.
 - `internal/agent/agent_test.go`: `TestAgentUsageAccounting` validates multi-turn + streaming usage accumulation, `Clear()` preservation of session totals, and `RecordUsage` rollups.
 - `internal/compact/compact_test.go`: `TestEstimateTokens` and `TestTokenBudget` validate estimation, pruning, tool atomicity, active-turn preservation, and `WithLogging`.
-- `commands_test.go`: `TestFormatIntWithCommas` and `TestCmdTokens` validate comma formatting, token/budget/EUR rendering, unknown model notice, and nil-global safety.
+- `commands_test.go`: `TestFormatIntWithCommas`, `TestCmdTokens`, and `TestFormatUsageStatus` validate comma formatting, token/budget/EUR rendering, live status line formatting, unknown model notice, and nil-global safety.
+- `internal/ui/program_test.go`: `TestHarnessUsageStatus` validates idle status rendering above the input box, `Thinking...` spinner priority while running, and nil-safe `SetUsageStatus`.
 
 ### Test 2: Inspecting Session Cost
 **User Prompt:**

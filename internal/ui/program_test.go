@@ -602,3 +602,53 @@ func TestHarnessViewportWrapping(t *testing.T) {
 	}
 }
 
+// TestHarnessUsageStatus verifies live token/cost rendering above the input box,
+// spinner priority while running, and nil-receiver safety on SetUsageStatus.
+func TestHarnessUsageStatus(t *testing.T) {
+	t.Run("renders usage summary in idle state and clears on empty update", func(t *testing.T) {
+		h := newTestHarness()
+		updated, _ := h.Update(usageStatusMsg("5,884 in · 47 out · ~€0.0169"))
+		m := updated.(harness)
+
+		if m.usageLine != "5,884 in · 47 out · ~€0.0169" {
+			t.Fatalf("expected stored usageLine, got %q", m.usageLine)
+		}
+		if view := m.View(); !strings.Contains(view, "5,884 in · 47 out · ~€0.0169") {
+			t.Errorf("expected idle view to display usage summary, got:\n%s", view)
+		}
+
+		cleared, _ := m.Update(usageStatusMsg(""))
+		mCleared := cleared.(harness)
+		if strings.Contains(mCleared.View(), "5,884 in") {
+			t.Errorf("expected empty usageStatusMsg to clear status line, got:\n%s", mCleared.View())
+		}
+	})
+
+	t.Run("spinner takes precedence while running without losing usage summary", func(t *testing.T) {
+		h := newTestHarness()
+		updated, _ := h.Update(usageStatusMsg("5,884 in · 47 out · ~€0.0169"))
+		m := updated.(harness)
+		m.state = stateRunning
+
+		runningArea := m.inputArea()
+		if !strings.Contains(runningArea, "Thinking...") {
+			t.Errorf("expected spinner status while running, got:\n%s", runningArea)
+		}
+		if strings.Contains(runningArea, "5,884 in") {
+			t.Errorf("expected Thinking indicator to replace usage line while running, got:\n%s", runningArea)
+		}
+
+		done, _ := m.Update(agentDoneMsg{})
+		mDone := done.(harness)
+		if !strings.Contains(mDone.inputArea(), "5,884 in · 47 out · ~€0.0169") {
+			t.Errorf("expected usage line to reappear after returning to idle, got:\n%s", mDone.inputArea())
+		}
+	})
+
+	t.Run("SetUsageStatus ignores nil Program or nil teaProgram safely", func(t *testing.T) {
+		var nilProg *Program
+		nilProg.SetUsageStatus("10 in · 5 out")
+		(&Program{}).SetUsageStatus("10 in · 5 out")
+	})
+}
+
