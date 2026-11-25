@@ -62,6 +62,9 @@ type SelectRequest struct {
 // modelUpdateMsg refreshes the banner when the active model changes dynamically.
 type modelUpdateMsg string
 
+// usageStatusMsg updates the subtle token and cost status line rendered above the input box.
+type usageStatusMsg string
+
 // agentDoneMsg signals that a background agent execution turn has finished.
 type agentDoneMsg struct {
 	err error
@@ -109,8 +112,9 @@ type harness struct {
 	followBottom bool             // Auto-scrolls viewport to bottom unless user manually scrolled up
 
 	modelName string
-	introStep int // Current sweep column index (0..55); -1 when animation is complete
-	bannerLen int // Byte length of the rendered banner at the start of the output buffer
+	usageLine string // Latest formatted token/cost summary displayed above the input box in idle state
+	introStep int    // Current sweep column index (0..55); -1 when animation is complete
+	bannerLen int    // Byte length of the rendered banner at the start of the output buffer
 }
 
 // View renders the terminal frame by vertically joining the scrollback viewport and the dynamic input area.
@@ -146,6 +150,8 @@ func (h harness) inputArea() string {
 	statusLine := " "
 	if h.state == stateRunning {
 		statusLine = fmt.Sprintf("%s Thinking...", h.spinner.View())
+	} else if h.usageLine != "" {
+		statusLine = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" " + h.usageLine)
 	}
 
 	box := lipgloss.NewStyle().
@@ -263,6 +269,9 @@ func (h harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.modelName = string(msg)
 		h.introStep = -1
 		h.renderBannerAtStep(-1)
+
+	case usageStatusMsg:
+		h.usageLine = string(msg)
 
 	case agentDoneMsg:
 		// Return to idle state upon background agent completion
@@ -641,6 +650,14 @@ func (p *Program) SelectModel(title string, options []string, current string) (s
 // SetModel updates the active model name rendered in the TUI banner.
 func (p *Program) SetModel(model string) {
 	p.teaProgram.Send(modelUpdateMsg(model))
+}
+
+// SetUsageStatus updates the subtle token and cost summary displayed above the input box.
+func (p *Program) SetUsageStatus(status string) {
+	if p == nil || p.teaProgram == nil {
+		return
+	}
+	p.teaProgram.Send(usageStatusMsg(status))
 }
 
 // Run executes the Bubble Tea program and ensures stdout and pipe descriptors are safely restored on exit.

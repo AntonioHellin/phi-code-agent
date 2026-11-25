@@ -336,3 +336,55 @@ func TestCmdTokens(t *testing.T) {
 	})
 }
 
+// TestFormatUsageStatus verifies live TUI usage status formatting across nil guards,
+// zero initial usage, known EUR tiers, and unknown model fallback.
+func TestFormatUsageStatus(t *testing.T) {
+	mock := &provider.MockProvider{
+		Responses: []api.Response{
+			{
+				Content:    []api.Block{{Type: api.BlockText, Text: "ok"}},
+				StopReason: "end_turn",
+				Usage:      api.Usage{InputTokens: 5884, OutputTokens: 47},
+			},
+		},
+	}
+	mock.SetModel("claude-sonnet-4-5-20250929")
+	setupCommandGlobals(t, mock)
+
+	// Before any turn is billed, the status line stays empty rather than showing zeros.
+	if got := formatUsageStatus(); got != "" {
+		t.Fatalf("expected empty status before first billed turn, got %q", got)
+	}
+
+	rootAgent = agent.New(agent.Agent{
+		Name:     "root",
+		Provider: mock,
+		Verbose:  false,
+	})
+	if _, err := rootAgent.Run(context.Background(), "hello"); err != nil {
+		t.Fatalf("unexpected Run error: %v", err)
+	}
+
+	wantKnown := "5,884 in · 47 out · ~€0.0169"
+	if got := formatUsageStatus(); got != wantKnown {
+		t.Errorf("formatUsageStatus() = %q, want %q", got, wantKnown)
+	}
+
+	// Switching to an unpriced model omits the EUR estimate instead of displaying €0.0000.
+	mock.SetModel("custom-unknown-model")
+	wantUnknown := "5,884 in · 47 out"
+	if got := formatUsageStatus(); got != wantUnknown {
+		t.Errorf("formatUsageStatus() with unknown model = %q, want %q", got, wantUnknown)
+	}
+
+	// Nil globals must return "" safely without panicking.
+	rootAgent = nil
+	if got := formatUsageStatus(); got != "" {
+		t.Errorf("expected empty status when rootAgent is nil, got %q", got)
+	}
+	prov = nil
+	if got := formatUsageStatus(); got != "" {
+		t.Errorf("expected empty status when prov is nil, got %q", got)
+	}
+}
+
