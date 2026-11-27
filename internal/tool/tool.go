@@ -23,6 +23,12 @@ type Tool interface {
 	Execute(ctx context.Context, rawInput string) (string, bool)
 }
 
+// Previewer is an optional capability for tools that can render a readable preview
+// and a short confirmation prompt before execution requires user approval.
+type Previewer interface {
+	Preview(rawInput string) (previewText string, confirmPrompt string, hasPreview bool)
+}
+
 // Registry maintains an in-memory catalog of registered tools indexed by name.
 // It enables the Open/Closed Principle (OCP) by allowing dynamic tool registration
 // without modifying main loop orchestration code.

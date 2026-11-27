@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -837,4 +840,133 @@ func TestAgentUsageAccounting(t *testing.T) {
 	if a.Usage().InputTokens != 300 || a.Usage().OutputTokens != 60 {
 		t.Errorf("expected RecordUsage rollup {in:300 out:60}, got %+v", a.Usage())
 	}
+}
+
+// TestAgentLoop_WriteFileDiffApproval verifies that Previewer tools present a clean
+// path-based confirmation prompt instead of raw JSON, writing on approval and aborting on denial.
+func TestAgentLoop_WriteFileDiffApproval(t *testing.T) {
+	buildWriteInput := func(targetPath, content string) string {
+		rawBytes, marshalErr := json.Marshal(map[string]string{
+			"path":    targetPath,
+			"content": content,
+		})
+		if marshalErr != nil {
+			t.Fatalf("failed to marshal write_file payload: %v", marshalErr)
+		}
+		return string(rawBytes)
+	}
+
+	t.Run("approving modified file writes proposed content and avoids raw JSON prompt", func(t *testing.T) {
+		targetPath := filepath.Join(t.TempDir(), "notes.txt")
+		if seedErr := os.WriteFile(targetPath, []byte("line one\nline two\n"), 0644); seedErr != nil {
+			t.Fatalf("failed seeding test file: %v", seedErr)
+		}
+
+		mockProv := &provider.MockProvider{
+			Responses: []api.Response{
+				{
+					Content: []api.Block{{
+						Type:      api.BlockToolUse,
+						ToolUseID: "write_edit_1",
+						ToolName:  "write_file",
+						ToolInput: buildWriteInput(targetPath, "line one\nline updated\n"),
+					}},
+					StopReason: "tool_use",
+				},
+				{
+					Content:    []api.Block{{Type: api.BlockText, Text: "Updated notes.txt."}},
+					StopReason: "end_turn",
+				},
+			},
+		}
+
+		var capturedPrompts []string
+		registry := tool.NewToolRegistry()
+		registry.RegisterWithRetry(&tool.WriteFileTool{}, 0)
+
+		agentInstance := New(Agent{
+			Name:     "diff-approve-agent",
+			Provider: mockProv,
+			Tools:    registry,
+			Policy:   permission.ReadOnlyPolicy{},
+			Confirm: func(prompt string) bool {
+				capturedPrompts = append(capturedPrompts, prompt)
+				return true
+			},
+		})
+
+		replyText, runErr := agentInstance.Run(context.Background(), "update notes.txt")
+		if runErr != nil {
+			t.Fatalf("unexpected Run error: %v", runErr)
+		}
+		if replyText != "Updated notes.txt." {
+			t.Errorf("unexpected final reply: %q", replyText)
+		}
+		if len(capturedPrompts) != 1 || capturedPrompts[0] != "Apply changes to "+targetPath+"?" {
+			t.Fatalf("expected clean Apply prompt, got %#v", capturedPrompts)
+		}
+
+		diskContent, readErr := os.ReadFile(targetPath)
+		if readErr != nil || string(diskContent) != "line one\nline updated\n" {
+			t.Errorf("expected disk file to contain updated text, got err=%v content=%q", readErr, string(diskContent))
+		}
+	})
+
+	t.Run("denying new file creation preserves disk and returns permission error to model", func(t *testing.T) {
+		targetPath := filepath.Join(t.TempDir(), "blocked.txt")
+
+		mockProv := &provider.MockProvider{
+			Responses: []api.Response{
+				{
+					Content: []api.Block{{
+						Type:      api.BlockToolUse,
+						ToolUseID: "write_deny_1",
+						ToolName:  "write_file",
+						ToolInput: buildWriteInput(targetPath, "secret content\n"),
+					}},
+					StopReason: "tool_use",
+				},
+				{
+					Content:    []api.Block{{Type: api.BlockText, Text: "Understood, aborted write."}},
+					StopReason: "end_turn",
+				},
+			},
+		}
+
+		var capturedPrompts []string
+		registry := tool.NewToolRegistry()
+		registry.RegisterWithRetry(&tool.WriteFileTool{}, 0)
+
+		agentInstance := New(Agent{
+			Name:     "diff-deny-agent",
+			Provider: mockProv,
+			Tools:    registry,
+			Policy:   permission.ReadOnlyPolicy{},
+			Confirm: func(prompt string) bool {
+				capturedPrompts = append(capturedPrompts, prompt)
+				return false
+			},
+		})
+
+		replyText, runErr := agentInstance.Run(context.Background(), "create blocked.txt")
+		if runErr != nil {
+			t.Fatalf("unexpected Run error: %v", runErr)
+		}
+		if replyText != "Understood, aborted write." {
+			t.Errorf("unexpected final reply: %q", replyText)
+		}
+		if len(capturedPrompts) != 1 || capturedPrompts[0] != "Create "+targetPath+"?" {
+			t.Fatalf("expected clean Create prompt, got %#v", capturedPrompts)
+		}
+		if _, statErr := os.Stat(targetPath); !os.IsNotExist(statErr) {
+			t.Fatalf("expected denied file %s not to exist on disk, statErr=%v", targetPath, statErr)
+		}
+
+		// Verify tool_result sent back to the model carries the user denial error.
+		historyMessages := agentInstance.Messages()
+		toolResultMessage := historyMessages[2]
+		if !toolResultMessage.Content[0].IsError || !strings.Contains(toolResultMessage.Content[0].ToolResult, "Permission denied by user") {
+			t.Errorf("expected tool_result error 'Permission denied by user', got %+v", toolResultMessage.Content[0])
+		}
+	})
 }

@@ -21,6 +21,9 @@ This file provides architectural guidelines and operational instructions for AI 
    - When committing on milestone branches (`step/*`), prefix the commit with the step branch (e.g. `step/13-harness-testing: test: implement comprehensive agent loop tests`). The repository hook in `.githooks/prepare-commit-msg` enforces this automatically.
    - When committing on `master` or general utility branches (`fix/*`, `refactor/*`), use standard conventional commits.
    - NEVER add AI co-author attributions (such as "Co-Authored-By: Assistant").
+5. **Descriptive, Educational Naming (Code, Tests & Examples)**:
+   - Avoid cryptic single-letter or generic variable names across implementations, unit tests, suggestions, and docs snippets whenever a domain-specific name clarifies intent.
+   - Short idiomatic identifiers are acceptable only for universal Go conventions or trivial receivers where scope makes meaning unambiguous.
 
 ## Build & Test Commands
 
