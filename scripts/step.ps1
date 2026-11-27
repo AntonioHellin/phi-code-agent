@@ -73,7 +73,7 @@ $Steps = @{
     12 = @{ Branch = "step/12-full-tui"; Guide = "docs/steps/12-full-tui.md"; Title = "Full Terminal UI (TUI)" }
     13 = @{ Branch = "step/13-harness-testing"; Guide = "docs/steps/13-harness-testing.md"; Title = "Harness End-to-End Testing" }
 
-    # --- Phase 2: Extensions, How-Tos and Extras (Pasos 14 al 27) ---
+    # --- Phase 2: Extensions, How-Tos and Extras (Pasos 14 al 28) ---
     14 = @{ Branch = "step/14-permission-policies"; Guide = "docs/steps/14-permission-policies.md"; Title = "Permission Policies" }
     15 = @{ Branch = "step/15-tool-retry"; Guide = "docs/steps/15-tool-retry.md"; Title = "Tool Error Retry" }
     16 = @{ Branch = "step/16-providers-and-mocks"; Guide = "docs/steps/16_1-providers-and-mocks.md"; Title = "Alternative Providers and Mocks" }
@@ -88,6 +88,7 @@ $Steps = @{
     25 = @{ Branch = "step/25-custom-tools"; Guide = "docs/steps/25-custom-tools.md"; Title = "Custom Tools Suite" }
     26 = @{ Branch = "step/26-transcript-renderer"; Guide = "docs/steps/26-transcript-renderer.md"; Title = "Transcript Renderer" }
     27 = @{ Branch = "step/27-markdown-subagents"; Guide = "docs/steps/27-markdown-subagents.md"; Title = "Markdown-Configured Subagents" }
+    28 = @{ Branch = "step/28-persistent-input-history"; Guide = "docs/steps/28-persistent-input-history.md"; Title = "Persistent Input History" }
 }
 # Automatically configure repository hooks path for commit prefixing
 $currentHooks = (git config --get core.hooksPath)
@@ -142,7 +143,7 @@ if ($Action -eq "status") {
     Write-Host ""
     Write-Host "=== Phi Agent Code Roadmap Status (Current: $currentBranch) ===" -ForegroundColor Cyan
     Write-Host ""
-    for ($i = 1; $i -le 27; $i++) {
+    for ($i = 1; $i -le 28; $i++) {
         if ($i -eq 1) {
             Write-Host "--- Phase 1: The Core Arc (Foundations & Architecture) ---" -ForegroundColor DarkCyan
         } elseif ($i -eq 14) {
@@ -193,7 +194,7 @@ elseif ($Action -eq "start") {
     }
     $stepNum = [int]$Step
     if (-not $Steps.ContainsKey($stepNum)) {
-        Write-Host "[-] Error: Invalid step number '$Step'. Must be between 1 and 27." -ForegroundColor Red
+        Write-Host "[-] Error: Invalid step number '$Step'. Must be between 1 and 28." -ForegroundColor Red
         exit 1
     }
 
@@ -273,11 +274,11 @@ elseif ($Action -eq "finish") {
     Write-Host ""
     Write-Host "[+] Step $stepPadded successfully completed and merged into $baseBranch!" -ForegroundColor Green
     Write-Host "    The branch '$currentBranch' remains preserved as a milestone snapshot." -ForegroundColor Cyan
-    if ($stepNum -lt 27) {
+    if ($stepNum -lt 28) {
         $nextNum = $stepNum + 1
         Write-Host "    Next step: .\scripts\step.ps1 start $nextNum" -ForegroundColor Yellow
     } else {
-        Write-Host "    Congratulations! You have completed all 27 milestones of the harness!" -ForegroundColor Magenta
+        Write-Host "    Congratulations! You have completed all 28 milestones of the harness!" -ForegroundColor Magenta
     }
     Write-Host ""
 }

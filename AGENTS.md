@@ -4,7 +4,7 @@ This file provides architectural guidelines and operational instructions for AI 
 
 ## What This Repository Is
 
-`phi-agent-code` is a hands-on learning workshop and production-ready reference implementation of an **AI coding agent harness in Go**. It traces the evolutionary design of tools like Claude Code, Aider, and OpenCode across 27 incremental milestones.
+`phi-agent-code` is a hands-on learning workshop and production-ready reference implementation of an **AI coding agent harness in Go**. It traces the evolutionary design of tools like Claude Code, Aider, and OpenCode across 28 incremental milestones.
 
 ## Core Conventions & Rules
 
@@ -43,4 +43,4 @@ go test -v ./...
 
 ## Milestone Documentation
 
-Detailed step-by-step guides with architecture diagrams and verification scenarios live under `docs/steps/` (`01-minimal-loop.md` to `27-markdown-subagents.md`).
+Detailed step-by-step guides with architecture diagrams and verification scenarios live under `docs/steps/` (`01-minimal-loop.md` to `28-persistent-input-history.md`).

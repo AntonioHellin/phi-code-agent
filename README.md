@@ -41,7 +41,7 @@ An engine sitting on a garage floor cannot drive anywhere. It needs:
 
 If the harness is poorly engineered, even the smartest frontier model will crash, leak tokens, get stuck in infinite error loops, or overwrite your source files. If the harness is well-engineered, even a modest model feels reliable, safe, and productive.
 
-This repository demystifies harness engineering by constructing one incrementally across **27 progressive milestones**.
+This repository demystifies harness engineering by constructing one incrementally across **28 progressive milestones**.
 
 ---
 
@@ -86,6 +86,7 @@ All milestones are organized into two clear phases: **Phase 1: The Core Arc** (e
 | **25** | **Custom Tools Suite** | Extending the harness with git_diff, grep, and file_search tools in internal/tool. | [Read Guide](docs/steps/25-custom-tools.md) | step/25-custom-tools |
 | **26** | **Transcript Renderer** | Exporting and formatting full conversation traces to Markdown and HTML in internal/ui. | [Read Guide](docs/steps/26-transcript-renderer.md) | step/26-transcript-renderer |
 | **27** | **Markdown-Configured Subagents** | Defining specialized subagents declaratively from YAML/Markdown files in internal/subagent. | [Read Guide](docs/steps/27-markdown-subagents.md) | step/27-markdown-subagents |
+| **28** | **Persistent Input History** | Restoring `Up`/`Down` prompt recall, draft preservation, and `~/.phi_agent_history` persistence in the Bubble Tea TUI. | [Read Guide](docs/steps/28-persistent-input-history.md) | step/28-persistent-input-history |
 
 ---
 ## Milestone Workflow Automation
