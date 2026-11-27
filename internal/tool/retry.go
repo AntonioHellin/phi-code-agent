@@ -129,5 +129,16 @@ func DefaultIsRetryable(output string, isError bool) bool {
 	return false
 }
 
+// Preview forwards optional pre-execution change previews to the wrapped tool.
+func (r *RetryDecorator) Preview(rawInput string) (previewText string, confirmPrompt string, hasPreview bool) {
+	if r == nil || r.Tool == nil {
+		return "", "", false
+	}
+	if previewer, ok := r.Tool.(Previewer); ok {
+		return previewer.Preview(rawInput)
+	}
+	return "", "", false
+}
+
 // Compile-time assertion ensuring RetryDecorator satisfies the Tool contract.
 var _ Tool = (*RetryDecorator)(nil)

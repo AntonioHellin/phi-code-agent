@@ -182,16 +182,14 @@ func (agentInstance *Agent) Run(ctx context.Context, prompt string) (string, err
 
 // executeTool resolves and runs requested tools within the agent's scoped registry.
 func (agentInstance *Agent) executeTool(ctx context.Context, toolName, rawArguments string) (string, bool) {
-	decision := agentInstance.Policy.Authorize(toolName, rawArguments)
-	switch decision {
+	targetTool, exists := agentInstance.Tools.Get(toolName)
+
+	switch agentInstance.Policy.Authorize(toolName, rawArguments) {
 	case permission.Deny:
 		return "Permission denied by policy", true
 	case permission.AskUser:
-		if agentInstance.Confirm != nil {
-			confirmationPrompt := fmt.Sprintf("Allow execution of %s %s?", toolName, rawArguments)
-			if !agentInstance.Confirm(confirmationPrompt) {
-				return "Permission denied by user", true
-			}
+		if !agentInstance.confirmToolExecution(targetTool, exists, toolName, rawArguments) {
+			return "Permission denied by user", true
 		}
 	case permission.Allow:
 		// Auto-approved
@@ -202,12 +200,47 @@ func (agentInstance *Agent) executeTool(ctx context.Context, toolName, rawArgume
 		agentInstance.logToolCall(toolName, rawArguments)
 	}
 
-	targetTool, exists := agentInstance.Tools.Get(toolName)
 	if !exists {
 		return fmt.Sprintf("unknown tool: %s", toolName), true
 	}
 
 	return targetTool.Execute(ctx, rawArguments)
+}
+
+// confirmToolExecution prints an optional tool preview and requests user approval via Confirm.
+func (agentInstance *Agent) confirmToolExecution(targetTool tool.Tool, exists bool, toolName, rawArguments string) bool {
+	if agentInstance.Confirm == nil {
+		return true
+	}
+
+	confirmationPrompt := buildConfirmationPrompt(targetTool, exists, toolName, rawArguments)
+	return agentInstance.Confirm(confirmationPrompt)
+}
+
+// buildConfirmationPrompt renders an optional Previewer diff and returns the confirmation question.
+func buildConfirmationPrompt(targetTool tool.Tool, exists bool, toolName, rawArguments string) string {
+	defaultPrompt := fmt.Sprintf("Allow execution of %s %s?", toolName, rawArguments)
+	if !exists {
+		return defaultPrompt
+	}
+
+	previewer, hasPreviewer := targetTool.(tool.Previewer)
+	if !hasPreviewer {
+		return defaultPrompt
+	}
+
+	previewText, customPrompt, hasPreview := previewer.Preview(rawArguments)
+	if !hasPreview {
+		return defaultPrompt
+	}
+
+	if previewText != "" {
+		fmt.Println(previewText)
+	}
+	if customPrompt != "" {
+		return customPrompt
+	}
+	return defaultPrompt
 }
 
 // logToolCall prints structured, human-friendly tool invocation notices to stdout.
