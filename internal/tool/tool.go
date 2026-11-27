@@ -3,7 +3,9 @@
 package tool
 
 import (
+	"cmp"
 	"context"
+	"slices"
 
 	"phi-agent-code/internal/api"
 )
@@ -69,5 +71,12 @@ func (r *Registry) Definitions() []api.ToolDef {
 	for _, t := range r.tools {
 		definitions = append(definitions, t.Definition())
 	}
+
+	// Sort deterministically by Name: Go randomizes map iteration order, which would
+	// otherwise mutate the tools prefix every turn and invalidate provider prompt caches.
+	slices.SortFunc(definitions, func(a, b api.ToolDef) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
 	return definitions
 }

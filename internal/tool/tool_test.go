@@ -89,6 +89,30 @@ func TestRegistryDefinitions(t *testing.T) {
 	}
 }
 
+// TestRegistryDefinitions_DeterministicOrder verifies Definitions sorts tools
+// alphabetically by Name so Go's randomized map iteration cannot invalidate prompt caches.
+func TestRegistryDefinitions_DeterministicOrder(t *testing.T) {
+	registry := NewToolRegistry()
+
+	// Register out of alphabetical order on purpose.
+	for _, name := range []string{"write_file", "bash", "read_file", "delegate"} {
+		registry.Register(&mockTool{name: name, description: name + " tool"})
+	}
+
+	want := []string{"bash", "delegate", "read_file", "write_file"}
+	for iter := 0; iter < 25; iter++ {
+		defs := registry.Definitions()
+		if len(defs) != len(want) {
+			t.Fatalf("iteration %d: expected %d definitions, got %d", iter, len(want), len(defs))
+		}
+		for i, name := range want {
+			if defs[i].Name != name {
+				t.Fatalf("iteration %d index %d: expected %q, got %q (non-deterministic order breaks prompt cache)", iter, i, name, defs[i].Name)
+			}
+		}
+	}
+}
+
 // TestDefaultRegistryContainsNativeTools verifies that bash, read_file, and write_file
 // self-register into DefaultRegistry during package initialization.
 func TestDefaultRegistryContainsNativeTools(t *testing.T) {

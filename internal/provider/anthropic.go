@@ -62,7 +62,10 @@ func (p *AnthropicProvider) buildParams(messages []api.Message, tools []api.Tool
 	}
 	// Omit System when blank because Anthropic's Messages API rejects empty text blocks.
 	if strings.TrimSpace(p.system) != "" {
-		params.System = []anthropic.TextBlockParam{{Text: p.system}}
+		params.System = []anthropic.TextBlockParam{{
+			Text:         p.system,
+			CacheControl: anthropic.NewCacheControlEphemeralParam(),
+		}}
 	}
 	return params
 }
@@ -182,7 +185,31 @@ func toAnthropicMessages(messages []api.Message) []anthropic.MessageParam {
 			params = append(params, anthropic.NewAssistantMessage(blocks...))
 		}
 	}
+
+	if len(params) > 0 {
+		lastMsg := &params[len(params)-1]
+		if len(lastMsg.Content) > 0 {
+			applyCacheControl(&lastMsg.Content[len(lastMsg.Content)-1])
+		}
+	}
+
 	return params
+}
+
+// applyCacheControl attaches an ephemeral prompt cache breakpoint to the given union block.
+func applyCacheControl(block *anthropic.ContentBlockParamUnion) {
+	if block == nil {
+		return
+	}
+	cc := anthropic.NewCacheControlEphemeralParam()
+	switch {
+	case block.OfText != nil:
+		block.OfText.CacheControl = cc
+	case block.OfToolUse != nil:
+		block.OfToolUse.CacheControl = cc
+	case block.OfToolResult != nil:
+		block.OfToolResult.CacheControl = cc
+	}
 }
 
 // toAnthropicTools converts domain ToolDefs into Anthropic SDK ToolUnionParam structs.
@@ -200,6 +227,11 @@ func toAnthropicTools(tools []api.ToolDef) []anthropic.ToolUnionParam {
 			},
 		})
 	}
+
+	if len(params) > 0 {
+		params[len(params)-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
+
 	return params
 }
 

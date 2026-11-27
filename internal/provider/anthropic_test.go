@@ -422,3 +422,102 @@ func TestAnthropicProvider_OmitsEmptySystem(t *testing.T) {
 	}
 }
 
+// TestAnthropicProvider_PromptCachingBreakpoints verifies serialized JSON requests place
+// ephemeral cache_control markers strictly on the last tool (BP1), system prompt (BP2),
+// and the final content block of the last message (BP3), while guarding empty/nil inputs.
+func TestAnthropicProvider_PromptCachingBreakpoints(t *testing.T) {
+	assertEphemeralCache := func(t *testing.T, obj map[string]any, label string) {
+		t.Helper()
+		rawCC, ok := obj["cache_control"]
+		if !ok {
+			t.Fatalf("%s: expected cache_control field to be serialized, got %v", label, obj)
+		}
+		cc, ok := rawCC.(map[string]any)
+		if !ok || cc["type"] != "ephemeral" {
+			t.Fatalf("%s: expected cache_control={type:ephemeral}, got %v", label, rawCC)
+		}
+	}
+	assertNoCache := func(t *testing.T, obj map[string]any, label string) {
+		t.Helper()
+		if cc, ok := obj["cache_control"]; ok {
+			t.Errorf("%s: expected no cache_control breakpoint, got %v", label, cc)
+		}
+	}
+
+	t.Run("places three cumulative breakpoints across tools, system, and trailing tool_result", func(t *testing.T) {
+		prov := NewAnthropicProvider(nil, string(anthropic.ModelClaudeHaiku5_5), 1024, "You are a concise assistant.")
+		tools := []api.ToolDef{
+			{Name: "bash", Description: "Run shell"},
+			{Name: "read_file", Description: "Read file"},
+		}
+		msgs := []api.Message{
+			{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "Read main.go"}}},
+			{Role: api.RoleAssistant, Content: []api.Block{
+				{Type: api.BlockText, Text: "Reading file"},
+				{Type: api.BlockToolUse, ToolUseID: "t1", ToolName: "read_file", ToolInput: `{"path":"main.go"}`},
+			}},
+			{Role: api.RoleUser, Content: []api.Block{
+				{Type: api.BlockToolResult, ToolUseID: "t1", ToolResult: "package main", IsError: false},
+			}},
+		}
+
+		rawJSON, err := json.Marshal(prov.buildParams(msgs, tools))
+		if err != nil {
+			t.Fatalf("failed to marshal params: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(rawJSON, &payload); err != nil {
+			t.Fatalf("failed to unmarshal params JSON: %v", err)
+		}
+
+		// BP1: Only the final tool carries cache_control so all tools share one prefix breakpoint.
+		rawTools := payload["tools"].([]any)
+		assertNoCache(t, rawTools[0].(map[string]any), "tools[0]")
+		assertEphemeralCache(t, rawTools[1].(map[string]any), "tools[1] (BP1)")
+
+		// BP2: System block isolates static system instructions from dynamic history.
+		rawSystem := payload["system"].([]any)
+		assertEphemeralCache(t, rawSystem[0].(map[string]any), "system[0] (BP2)")
+
+		// BP3: Only the final block of the last message carries cache_control.
+		rawMsgs := payload["messages"].([]any)
+		msg0Blocks := rawMsgs[0].(map[string]any)["content"].([]any)
+		assertNoCache(t, msg0Blocks[0].(map[string]any), "messages[0].content[0]")
+
+		msg1Blocks := rawMsgs[1].(map[string]any)["content"].([]any)
+		assertNoCache(t, msg1Blocks[0].(map[string]any), "messages[1].content[0]")
+		assertNoCache(t, msg1Blocks[1].(map[string]any), "messages[1].content[1]")
+
+		msg2Blocks := rawMsgs[2].(map[string]any)["content"].([]any)
+		assertEphemeralCache(t, msg2Blocks[0].(map[string]any), "messages[2].content[0] (BP3)")
+	})
+
+	t.Run("marks final tool_use or text block and handles empty slices and nil cleanly", func(t *testing.T) {
+		applyCacheControl(nil)
+
+		prov := NewAnthropicProvider(nil, string(anthropic.ModelClaudeHaiku5_5), 1024, "   ")
+		emptyParams := prov.buildParams(nil, nil)
+		if len(emptyParams.Tools) != 0 || len(emptyParams.Messages) != 0 || len(emptyParams.System) != 0 {
+			t.Fatalf("expected empty params for empty inputs, got %+v", emptyParams)
+		}
+
+		// Multi-block assistant turn ending in tool_use must place BP3 only on the trailing block.
+		msgs := []api.Message{
+			{Role: api.RoleAssistant, Content: []api.Block{
+				{Type: api.BlockText, Text: "Checking"},
+				{Type: api.BlockToolUse, ToolUseID: "t2", ToolName: "bash", ToolInput: `{"command":"ls"}`},
+			}},
+		}
+		rawJSON, err := json.Marshal(prov.buildParams(msgs, nil))
+		if err != nil {
+			t.Fatalf("failed to marshal params: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(rawJSON, &payload); err != nil {
+			t.Fatalf("failed to unmarshal params JSON: %v", err)
+		}
+		blocks := payload["messages"].([]any)[0].(map[string]any)["content"].([]any)
+		assertNoCache(t, blocks[0].(map[string]any), "messages[0].content[0]")
+		assertEphemeralCache(t, blocks[1].(map[string]any), "messages[0].content[1] tool_use (BP3)")
+	})
+}
